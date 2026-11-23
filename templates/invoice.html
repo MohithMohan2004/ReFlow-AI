@@ -290,7 +290,7 @@
             <svg class="i" viewBox="0 0 24 24"><path d="M19 12H5"/><path d="m12 19-7-7 7-7"/></svg>
             <span class="label-text">Back to orders</span>
         </a>
-        <button type="button" class="btn-ghost" onclick="window.print()">
+        <button type="button" class="btn-ghost" data-action="print">
             <svg class="i" viewBox="0 0 24 24"><path d="M6 9V2h12v7"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8" rx="1"/></svg>
             <span class="label-text">Print / Save PDF</span>
         </button>
@@ -556,7 +556,9 @@
 </div>
 {% endif %}
 
-<script>
+<script nonce="{{ csp_nonce() }}">
+document.querySelectorAll("[data-action=print]").forEach(function (b) { b.addEventListener("click", function () { window.print(); }); });
+
 (function () {
     "use strict";
 

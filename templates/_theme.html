@@ -1,5 +1,5 @@
 {# Light / dark theme: same preference as the React app ("reflow-theme" in localStorage, else the OS setting). #}
-<script>
+<script nonce="{{ csp_nonce() }}">
   (function () {
     var p = null;
     try { p = localStorage.getItem("reflow-theme"); } catch (e) {}

@@ -217,13 +217,15 @@ def check_same_origin():
 # Allow-list built from every external resource the pages use: Google Fonts,
 # Leaflet / leaflet.heat (jsDelivr), Chart.js (cdnjs), OpenStreetMap tiles,
 # Nominatim geocoding and OSRM routing called from the browser.
-# 'unsafe-inline' stays for scripts because the Jinja pages and the SPA's
-# theme bootstrap use inline <script> blocks and onclick handlers.
+# Inline scripts run only with this request's nonce (Jinja pages) or a
+# hash of the built SPA shell's own bootstrap script: no 'unsafe-inline' for
+# scripts, so injected markup can't run code. Styles keep 'unsafe-inline'
+# because the templates use style="" attributes (no script runs from CSS).
 # ---------------------------------------------------------------------------
 
 CONTENT_SECURITY_POLICY = "; ".join([
     "default-src 'self'",
-    "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com",
+    "script-src 'self' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com",
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net",
     "font-src 'self' data: https://fonts.gstatic.com",
     "img-src 'self' data: blob: https://tile.openstreetmap.org https://*.tile.openstreetmap.org",
@@ -238,9 +240,51 @@ CONTENT_SECURITY_POLICY = "; ".join([
 ])
 
 
+SPA_SCRIPT_HASHES = []   # filled by remember_spa_scripts() at startup
+
+
+def csp_nonce():
+    """This request's script nonce (one per request, made on first use)."""
+    from flask import g
+    import secrets
+    nonce = getattr(g, "csp_nonce", None)
+    if not nonce:
+        nonce = g.csp_nonce = secrets.token_urlsafe(18)
+    return nonce
+
+
+def inline_script_hashes(html):
+    """CSP hashes of every inline <script> body in a static HTML page."""
+    import base64
+    import hashlib
+    bodies = _re_mod().findall(r"<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>", html, _re_mod().S)
+    return ["'sha256-" + base64.b64encode(hashlib.sha256(b.encode("utf-8")).digest()).decode() + "'" for b in bodies]
+
+
+def _re_mod():
+    import re
+    return re
+
+
+def remember_spa_scripts(index_path):
+    """Allow the built React shell's own inline bootstrap script by hash.
+    Called once at startup; a new build means a new deploy and a restart."""
+    global SPA_SCRIPT_HASHES
+    try:
+        with open(index_path, encoding="utf-8") as f:
+            SPA_SCRIPT_HASHES = inline_script_hashes(f.read())
+    except OSError:
+        SPA_SCRIPT_HASHES = []
+
+
+def content_security_policy():
+    extra = " ".join([f"'nonce-{csp_nonce()}'", *SPA_SCRIPT_HASHES])
+    return CONTENT_SECURITY_POLICY.replace("script-src 'self'", f"script-src 'self' {extra}", 1)
+
+
 def set_security_headers(response):
     headers = response.headers
-    headers.setdefault("Content-Security-Policy", CONTENT_SECURITY_POLICY)
+    headers.setdefault("Content-Security-Policy", content_security_policy())
     headers.setdefault("X-Content-Type-Options", "nosniff")
     headers.setdefault("X-Frame-Options", "DENY")
     headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
@@ -259,6 +303,7 @@ def init_app(app):
     app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=0, x_port=0, x_prefix=0)
 
     app.config["MAX_CONTENT_LENGTH"] = MAX_CONTENT_LENGTH
+    app.jinja_env.globals["csp_nonce"] = csp_nonce
     app.before_request(reject_oversized_body)
     app.before_request(check_same_origin)
     app.before_request(check_rate_limit)

@@ -2496,6 +2496,7 @@ def load_ocems_data(stp_id):
 # =========================================================
 
 SPA_INDEX = os.path.join(app.root_path, "static", "app", "index.html")
+security.remember_spa_scripts(SPA_INDEX)
 
 
 def serve_spa():
@@ -8136,7 +8137,7 @@ def cancel_cod():
         # Return immediately to the previous page instead of loading the
         # full Demand page again. This keeps cancellation fast.
         return Response(
-            "<script>window.history.back();</script>",
+            f'<script nonce="{security.csp_nonce()}">window.history.back();</script>',
             mimetype="text/html"
         )
 
@@ -8183,7 +8184,7 @@ def cancel_cod():
     # Return immediately without re-rendering the Demand dashboard.
     # This prevents the cancellation request from waiting on the full page load.
     return Response(
-        "<script>window.history.back();</script>",
+        f'<script nonce="{security.csp_nonce()}">window.history.back();</script>',
         mimetype="text/html"
     )
 

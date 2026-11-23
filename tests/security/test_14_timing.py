@@ -31,7 +31,8 @@ def test_web_login_same_answer(client, auth_errors):
     a = client.post("/login", data={"login_identifier": "missing@example.com", "password": "whatever-1"})
     b = client.post("/login", data={"login_identifier": "exists@example.com", "password": "whatever-1"})
     assert a.status_code == b.status_code
-    assert a.data == b.data
+    strip = lambda r: re.sub(rb'nonce="[^"]+"', b"", r.data)   # per-request CSP nonce
+    assert strip(a) == strip(b)
     assert b"Invalid email or password." in a.data
 
 

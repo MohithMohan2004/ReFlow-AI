@@ -132,7 +132,6 @@
                         <button
                             type="button"
                             class="toggle"
-                            onclick="togglePassword()"
                             aria-label="Show password"
                             aria-pressed="false"
                         >
@@ -180,7 +179,9 @@
 
 </main>
 
-<script>
+<script nonce="{{ csp_nonce() }}">
+document.querySelector(".password-wrap .toggle").addEventListener("click", togglePassword);
+
 function togglePassword() {
     const input = document.getElementById("password");
     const button = document.querySelector(".password-wrap .toggle");
