@@ -239,6 +239,23 @@ def normalise_data_link(raw, provider="trata"):
 # Vendor calls
 # ---------------------------------------------------------------------------
 
+def _require_public_host(host):
+    """Refuse a vendor host that resolves to a private, loopback, link-local
+    or otherwise internal address (SSRF). The
+    host name itself is already limited to the vendor's domain."""
+    import ipaddress
+    import socket
+    try:
+        infos = socket.getaddrinfo(host, 443, proto=socket.IPPROTO_TCP)
+    except (socket.gaierror, UnicodeError):
+        raise OcemsApiError("Could not reach the OCEMS platform. Check the platform URL.")
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0].split("%")[0])
+        if not ip.is_global or ip.is_multicast:
+            _log(f"{host} resolves to non-public address {ip}; refused")
+            raise OcemsApiError("The platform URL doesn't point to a public OCEMS server.")
+
+
 def _get_csv(base_url, api_key, path, params=None, provider="trata", timeout=REQUEST_TIMEOUT):
     """GET base_url + path. With a data link as api_key, the link's own
     query (which carries the key) is sent instead of the key header, and
@@ -254,6 +271,7 @@ def _get_csv(base_url, api_key, path, params=None, provider="trata", timeout=REQ
         headers[spec["key_header"]] = api_key
     started = time.monotonic()
     host = urlparse(url).hostname
+    _require_public_host(host)
     try:
         res = _with_deadline(
             lambda: requests.get(
