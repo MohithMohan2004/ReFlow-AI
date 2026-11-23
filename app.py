@@ -100,6 +100,11 @@ def reverse_geocode_location(lat, lon):
 app = Flask(__name__)
 app.config.from_object(Config)
 
+import security  # noqa: E402  request limits, headers, CSRF
+
+security.init_app(app)
+reset_rate_limits = security.limiter.reset
+
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 

@@ -31,4 +31,9 @@ RUN mkdir -p uploads && useradd -m reflow && chown -R reflow /app
 USER reflow
 
 EXPOSE 10000
-CMD ["sh", "-c", "exec gunicorn app:app --bind 0.0.0.0:${PORT} --timeout 120 --workers ${WEB_CONCURRENCY:-2}"]
+# HTTP/1.1 only: TLS and HTTP/2 end at the Azure ingress, so gunicorn never
+# parses HTTP/2 frames (CVE-2023-44487 "Rapid Reset" is handled there).
+# Header limits are gunicorn's defaults, made explicit. 75 s covers the slowest
+# request (an OCEMS vendor test call, capped at about 60 s); long work runs in
+# background threads.
+CMD ["sh", "-c", "exec gunicorn app:app --bind 0.0.0.0:${PORT} --http-protocols h1 --timeout 75 --graceful-timeout 30 --keep-alive 5 --limit-request-line 4094 --limit-request-fields 100 --limit-request-field_size 8190 --workers ${WEB_CONCURRENCY:-2}"]
