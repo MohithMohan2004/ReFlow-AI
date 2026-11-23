@@ -12006,6 +12006,16 @@ def handle_transfer_request():
 
 
 
+CHAT_MESSAGE_MAX_LENGTH = 1000
+# The lookbehind starts a number only at its first digit, so a long run of
+# digits is scanned once (linear; the old pattern was quadratic).
+CHAT_QUANTITY = re.compile(r"(?<![\d.])(\d+(?:\.\d+)?)\s*(kld|kl|litres?|liters?)\b", re.IGNORECASE)
+CHAT_LOCATION_AFTER_STP = re.compile(
+    r"\b(?:to|for|near|around|at|in)\s+(.+)$",
+    re.IGNORECASE
+)
+
+
 @app.route("/api/chat", methods=["POST"])
 def chatbot():
     """
@@ -12037,6 +12047,9 @@ def chatbot():
         message = str(data.get("message") or "").strip()
         if not message:
             return jsonify({"reply": "Please type a question."}), 400
+
+        # Cap the text before any regex or fuzzy matching runs on it.
+        message = message[:CHAT_MESSAGE_MAX_LENGTH]
 
         text = re.sub(r"\s+", " ", message.lower()).strip()
 
@@ -12189,10 +12202,7 @@ def chatbot():
         # ---------------------------------------------------------
         requested_kld = None
 
-        quantity_match = re.search(
-            r"(\d+(?:\.\d+)?)\s*(kld|kl|litres?|liters?)\b",
-            text
-        )
+        quantity_match = CHAT_QUANTITY.search(text)
 
         if quantity_match:
             quantity_value = float(quantity_match.group(1))
@@ -12367,10 +12377,13 @@ def chatbot():
             mentioned_location = llm_location
 
             if not mentioned_location:
-                location_match = re.search(
-                    r"stp.*?\b(?:to|for|near|around|at|in)\s+(.+)$",
-                    text,
-                    re.IGNORECASE
+                # Same as r"stp.*?\b(?:to|for|...)\s+(.+)$" but linear:
+                # find the first "stp", then the first place word after it.
+                stp_at = text.find("stp")
+                location_match = (
+                    CHAT_LOCATION_AFTER_STP.search(text, stp_at + 3)
+                    if stp_at >= 0
+                    else None
                 )
 
                 if location_match:

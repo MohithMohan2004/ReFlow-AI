@@ -649,16 +649,23 @@ def _parse_timestamp(value):
     return dt
 
 
+# Header cells come from the vendor. Cap them, and keep the unit pattern
+# linear: the inner class excludes every bracket, so each "(" or "[" is tried
+# once (the old "\s*([^)\]]*)\s*" took minutes on 2,000 characters).
+MAX_LABEL_LENGTH = 200
+UNIT_IN_BRACKETS = re.compile(r"[\(\[]([^\(\)\[\]]*)[\)\]]\s*$")
+
+
 def _split_label(label):
     """"BOD (mg/l)" -> ("BOD (mg/l)", "mg/l")."""
-    label = str(label or "").strip()
-    m = re.search(r"[\(\[]\s*([^\)\]]*)\s*[\)\]]\s*$", label)
+    label = str(label or "").strip()[:MAX_LABEL_LENGTH]
+    m = UNIT_IN_BRACKETS.search(label)
     unit = m.group(1).strip() if m else ""
     return label, unit
 
 
 def _canonical(label):
-    base = re.sub(r"[\(\[].*$", "", label).strip()
+    base = re.sub(r"[\(\[].*$", "", str(label)[:MAX_LABEL_LENGTH]).strip()
     for pattern, name in CANONICAL:
         if pattern.search(base):
             return name
