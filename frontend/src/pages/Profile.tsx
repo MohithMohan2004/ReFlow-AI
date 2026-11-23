@@ -2,8 +2,7 @@ import { own } from "../lib/lookup";
 import { useState, type FormEvent } from "react";
 import { Marker } from "react-leaflet";
 import {
-  AtSign, Building2, CircleCheck, ClipboardList, Droplets, Factory, Gauge, IdCard, LogOut, Pencil, Mail, MapPin, Phone,
-  KeyRound, Radar, ShieldCheck, Truck, Unplug, Wifi,
+  AtSign, Building2, CircleCheck, ClipboardList, Droplets, Factory, Gauge, IdCard, LogOut, Pencil, Mail, MapPin, Phone, KeyRound, Radar, ShieldCheck, Truck, Unplug, Wifi, MonitorSmartphone,
 } from "lucide-react";
 import { AppShell } from "../components/AppShell";
 import { publicNav, roleNav } from "../components/nav";
@@ -82,6 +81,8 @@ export default function Profile() {
           <OperatorCard op={p.data?.operator ?? null} />
         ) : null}
 
+        <SignOutEverywhereCard />
+
         <section className="card">
           <header className="card-head">
             <div><h2>Appearance</h2><p>Choose how ReFlow looks on this device</p></div>
@@ -98,6 +99,48 @@ export default function Profile() {
         <EditDialog data={p.data} onClose={() => setEditing(false)} onSaved={() => { setEditing(false); window.location.reload(); }} />
       )}
     </AppShell>
+  );
+}
+
+/** "Sign out" in the menu ends only this device. This ends every session
+ *  of the account (phones, other browsers, anything left signed in). */
+function SignOutEverywhereCard() {
+  const toast = useToast();
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  async function signOutEverywhere() {
+    setBusy(true);
+    try {
+      await postJSON("/api/logout_all", {});
+      window.location.href = "/login";
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Could not sign out of all devices", "danger");
+      setBusy(false);
+    }
+  }
+  return (
+    <section className="card">
+      <header className="card-head">
+        <div><h2>Signed-in devices</h2><p>Sign out on every phone and browser where this account is signed in</p></div>
+      </header>
+      <div className="row wrap" style={{ padding: "14px 20px 18px", gap: 12, justifyContent: "space-between" }}>
+        <p className="muted" style={{ margin: 0, maxWidth: "52ch" }}>
+          Use this if you signed in on a shared computer or lost a phone. "Sign out" in the menu only signs out this device.
+        </p>
+        <button type="button" className="btn btn-danger" onClick={() => setConfirming(true)}><MonitorSmartphone /> Sign out of all devices</button>
+      </div>
+      {confirming && (
+        <Dialog title="Sign out of all devices?" onClose={() => setConfirming(false)}>
+          <div className="stack">
+            <p style={{ margin: 0 }}>You'll be signed out here and on every other phone and browser. You can sign in again straight away.</p>
+            <div className="row" style={{ justifyContent: "flex-end", gap: 8 }}>
+              <button type="button" className="btn btn-ghost" onClick={() => setConfirming(false)}>Cancel</button>
+              <button type="button" className="btn btn-danger" disabled={busy} onClick={signOutEverywhere}>{busy ? "Signing out…" : "Sign out everywhere"}</button>
+            </div>
+          </div>
+        </Dialog>
+      )}
+    </section>
   );
 }
 

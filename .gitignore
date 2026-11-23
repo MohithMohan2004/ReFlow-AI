@@ -192,3 +192,28 @@ database/ocems_submissions.csv
 
 # Runtime profile edits (real names and phone numbers); never commit
 data/profile_overrides.json
+
+# Runtime security data written by the app (local dev; Postgres in production)
+# plant-account requests: names, emails, phones
+database/stp_accounts.csv
+# admins' encrypted authenticator secrets
+database/admin_mfa.csv
+# encrypted OCEMS vendor keys
+database/ocems_api_connections.csv
+data/session_epochs.json
+data/revoked_sessions.json
+
+# Private team and outreach material (the repository is public)
+# internal Azure/ops notes
+ReFlow-Azure-team-changes.md
+# outreach videos and PDF
+email-kit/
+task.md
+tasks.md
+
+# Signing keys, wherever they end up
+*.jks
+*.keystore
+*.p12
+*.pem
+mobile/android/keystore.properties

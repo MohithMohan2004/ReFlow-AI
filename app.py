@@ -2689,6 +2689,7 @@ def login():
             user.id
         )
         session["epoch"] = session_epoch(user.id)
+        session["sid"] = secrets.token_urlsafe(18)
 
         session["first_name"] = str(
             metadata.get("first_name") or ""
@@ -3553,7 +3554,7 @@ def logout():
     except Exception as e:
         print("Supabase logout error:", e)
 
-    end_all_sessions(session.get("user_id"))
+    end_this_session()
     session.clear()
 
     return redirect(url_for("login"))
@@ -3820,6 +3821,37 @@ def session_epoch(user_id):
     return int(load_session_epochs().get(str(user_id), 0) or 0)
 
 
+REVOKED_SESSIONS_FILE = os.path.join(BASE_DIR, "data", "revoked_sessions.json")
+
+
+def load_revoked_sessions():
+    if not store.exists(REVOKED_SESSIONS_FILE) or store.getsize(REVOKED_SESSIONS_FILE) == 0:
+        return {}
+    try:
+        with store.open(REVOKED_SESSIONS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (ValueError, OSError):
+        return {}
+
+
+def end_this_session():
+    """Sign out this device only: the session's own ID is recorded as ended,
+    so a copy of this cookie stops working too, while the user's other
+    devices stay signed in. Entries are dropped once a session would have
+    expired anyway."""
+    sid = str(session.get("sid") or "")
+    if not sid:
+        return
+    now = time.time()
+    keep_for = app.permanent_session_lifetime.total_seconds()
+    with security.data_lock():
+        revoked = {k: v for k, v in load_revoked_sessions().items() if float(v) > now - keep_for}
+        revoked[sid] = now
+        with store.open(REVOKED_SESSIONS_FILE, "w", encoding="utf-8") as f:
+            json.dump(revoked, f)
+
+
 def end_all_sessions(user_id):
     """Invalidate every session of this user."""
     if not user_id:
@@ -3936,7 +3968,10 @@ def enforce_plant_approval():
         return None
     if not session.get("user_id"):
         return None
-    if int(session.get("epoch") or 0) != session_epoch(session.get("user_id")):
+    if (
+        int(session.get("epoch") or 0) != session_epoch(session.get("user_id"))
+        or (session.get("sid") and str(session["sid"]) in load_revoked_sessions())
+    ):
         security.audit("session_revoked_used")
         session.clear()
         if request.path.startswith("/api/"):
@@ -4356,6 +4391,7 @@ def api_login():
 
         session["user_id"] = str(user.id)
         session["epoch"] = session_epoch(user.id)
+        session["sid"] = secrets.token_urlsafe(18)
 
         session["first_name"] = str(
             metadata.get("first_name", "")
@@ -4775,13 +4811,24 @@ def api_logout():
     except Exception as e:
         print("Flutter API Supabase logout error:", e)
 
-    end_all_sessions(session.get("user_id"))
+    end_this_session()
     session.clear()
 
     return jsonify({
         "success": True,
         "message": "Logged out successfully."
     }), 200
+
+
+@app.route("/api/logout_all", methods=["POST"])
+def api_logout_all():
+    """Profile → "Sign out of all devices": ends every session of this user,
+    on every device, including this one."""
+    if not session.get("user_id"):
+        return jsonify({"success": False, "error": "Login required"}), 401
+    end_all_sessions(session.get("user_id"))
+    session.clear()
+    return jsonify({"success": True, "message": "Signed out of all devices."})
 
 
 @app.route("/tanker/register")
