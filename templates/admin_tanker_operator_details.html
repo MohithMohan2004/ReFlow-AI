@@ -523,11 +523,9 @@
 
 
 
-    {% if request.args.get("fleet_error") %}
-        <div class="fleet-notice error" role="alert">{{ request.args.get("fleet_error") }}</div>
-    {% elif request.args.get("fleet_notice") %}
-        <div class="fleet-notice" role="status">{{ request.args.get("fleet_notice") }}</div>
-    {% endif %}
+    {% for category, message in get_flashed_messages(with_categories=true) %}
+        <div class="fleet-notice{{ ' error' if category == 'error' else '' }}" role="{{ 'alert' if category == 'error' else 'status' }}">{{ message }}</div>
+    {% endfor %}
 
     <!-- =========================
          DOCUMENT STATS

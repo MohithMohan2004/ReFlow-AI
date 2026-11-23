@@ -479,6 +479,7 @@ JSON_FILES = {
     "data/stp_data.json": "stps",
     "data/stp_status.json": "stp_status",
     "data/profile_overrides.json": "profile_overrides",
+    "data/session_epochs.json": "session_epochs",
 }
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))

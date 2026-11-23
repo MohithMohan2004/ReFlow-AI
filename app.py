@@ -1,5 +1,5 @@
 from flask import Flask, jsonify, request, render_template, redirect, url_for, send_file, Response
-from flask import session
+from flask import session, flash
 from functools import wraps
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
@@ -1192,7 +1192,7 @@ def safe_float(value, default=0.0):
         if value in (None, ""):
             return default
 
-        return float(value)
+        return security.finite_float(value)
 
     except (TypeError, ValueError):
         return default
@@ -2221,6 +2221,13 @@ def save_stps(stps):
         json.dump({"stps": stps}, f, indent=4)
 
 def auto_reset_capacity():
+    """Runs under the cross-process data lock (re-entrant), so it is safe
+    from lock-free endpoints too (SECURITY pentest PT-10)."""
+    with security.data_lock():
+        return _auto_reset_capacity_unlocked()
+
+
+def _auto_reset_capacity_unlocked():
     """Release STP capacity for accepted orders exactly 24 hours after acceptance."""
     now = datetime.now()
     stps = load_stps()
@@ -2681,6 +2688,7 @@ def login():
         session["user_id"] = str(
             user.id
         )
+        session["epoch"] = session_epoch(user.id)
 
         session["first_name"] = str(
             metadata.get("first_name") or ""
@@ -3476,26 +3484,18 @@ def signup():
                 response.user.id, email, f"{first_name} {last_name}".strip(), mobile, stp_id
             )
 
-            return redirect(
-                url_for(
-                    "login",
-                    signup_success=(
-                        "Account created. The ReFlow team will check that you run "
-                        f"{plant_account.get('stp_name') or stp_id} and approve your access; "
-                        "you can sign in after that."
-                    )
-                )
+            # Messages travel in the signed session, never in the URL, so
+            # nobody can make the login page show their own text (pentest PT-07).
+            flash(
+                "Account created. The ReFlow team will check that you run "
+                f"{plant_account.get('stp_name') or stp_id} and approve your access; "
+                "you can sign in after that.",
+                "success"
             )
+            return redirect(url_for("login"))
 
-        return redirect(
-            url_for(
-                "login",
-                signup_success=(
-                    "Account created successfully. "
-                    "Please log in."
-                )
-            )
-        )
+        flash("Account created successfully. Please log in.", "success")
+        return redirect(url_for("login"))
 
     # =========================================================
     # SUPABASE ERROR
@@ -3553,6 +3553,7 @@ def logout():
     except Exception as e:
         print("Supabase logout error:", e)
 
+    end_all_sessions(session.get("user_id"))
     session.clear()
 
     return redirect(url_for("login"))
@@ -3571,15 +3572,12 @@ def delete_account():
         # Clear Flask session
         session.clear()
 
-        return redirect(
-            url_for(
-                "login",
-                account_deleted=(
-                    "You have been logged out. "
-                    "Account deletion requires Supabase admin configuration."
-                )
-            )
+        flash(
+            "You have been logged out. "
+            "Account deletion requires Supabase admin configuration.",
+            "success"
         )
+        return redirect(url_for("login"))
 
     except Exception as e:
         print("Supabase account deletion error:", e)
@@ -3738,11 +3736,11 @@ def api_stp_details_update():
     if quality_grade not in STP_GRADES:
         return fail("Choose a quality grade.")
     try:
-        total_mld = float(body.get("total_capacity_kld")) / 1000
-        load_mld = float(body.get("current_load_kld")) / 1000
-        cost = float(body.get("treatment_cost_per_kl"))
-        lat = float(body.get("latitude"))
-        lon = float(body.get("longitude"))
+        total_mld = security.finite_float(body.get("total_capacity_kld"), 0, 10_000_000) / 1000
+        load_mld = security.finite_float(body.get("current_load_kld"), 0, 10_000_000) / 1000
+        cost = security.finite_float(body.get("treatment_cost_per_kl"), 0, 100_000)
+        lat = security.finite_float(body.get("latitude"), -90, 90)
+        lon = security.finite_float(body.get("longitude"), -180, 180)
     except (TypeError, ValueError):
         return fail("Enter numbers for capacity, load, cost and location.")
     if not all(math.isfinite(v) for v in (total_mld, load_mld, cost, lat, lon)):
@@ -3794,6 +3792,45 @@ def api_stp_details_update():
 # =========================================================
 # OCEMS API CONNECTION (plant side, from the profile page)
 # =========================================================
+
+# =========================================================
+# SESSION REVOCATION (pentest PT-03)
+# Sessions are signed cookies, so the server can't delete one. Each user
+# has an epoch number; a session is valid only while it carries the
+# current one. Logging out bumps it, which ends every copy of every
+# session of that user (all devices). Missing = epoch 0, so sessions made
+# before this change keep working until the user's next logout.
+# =========================================================
+
+SESSION_EPOCHS_FILE = os.path.join(BASE_DIR, "data", "session_epochs.json")
+
+
+def load_session_epochs():
+    if not store.exists(SESSION_EPOCHS_FILE) or store.getsize(SESSION_EPOCHS_FILE) == 0:
+        return {}
+    try:
+        with store.open(SESSION_EPOCHS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (ValueError, OSError):
+        return {}
+
+
+def session_epoch(user_id):
+    return int(load_session_epochs().get(str(user_id), 0) or 0)
+
+
+def end_all_sessions(user_id):
+    """Invalidate every session of this user."""
+    if not user_id:
+        return
+    with security.data_lock():
+        epochs = load_session_epochs()
+        epochs[str(user_id)] = int(epochs.get(str(user_id), 0) or 0) + 1
+        with store.open(SESSION_EPOCHS_FILE, "w", encoding="utf-8") as f:
+            json.dump(epochs, f)
+    security.audit("sessions_ended", account=str(user_id))
+
 
 # =========================================================
 # PLANT ACCOUNTS (admin approval)
@@ -3853,7 +3890,7 @@ def approved_stp_id(user_id):
 
 def request_stp_account(user_id, email, name, phone, stp_id):
     """File a pending request (once) and return the user's current row."""
-    with stp_accounts_lock:
+    with security.data_lock(), stp_accounts_lock:
         existing = stp_account_for(user_id)
         if existing is not None:
             return existing
@@ -3899,6 +3936,12 @@ def enforce_plant_approval():
         return None
     if not session.get("user_id"):
         return None
+    if int(session.get("epoch") or 0) != session_epoch(session.get("user_id")):
+        security.audit("session_revoked_used")
+        session.clear()
+        if request.path.startswith("/api/"):
+            return jsonify({"success": False, "error": "Please sign in again."}), 401
+        return redirect(url_for("login"))
     role = str(session.get("role") or "").strip().lower()
     if role in ADMIN_ROLES:
         age = time.time() - float(session.get("auth_at") or 0)
@@ -4101,7 +4144,7 @@ def api_ocems_connection_submit():
         return jsonify({"success": False, "error": test_message}), 400
     now = datetime.now().isoformat(timespec="seconds")
 
-    with ocems_api_lock:
+    with security.data_lock(), ocems_api_lock:
         rows = load_ocems_api_connections()
         # One live feed per plant: a working new key replaces the old one.
         for row in rows:
@@ -4312,6 +4355,7 @@ def api_login():
         session.permanent = True
 
         session["user_id"] = str(user.id)
+        session["epoch"] = session_epoch(user.id)
 
         session["first_name"] = str(
             metadata.get("first_name", "")
@@ -4731,6 +4775,7 @@ def api_logout():
     except Exception as e:
         print("Flutter API Supabase logout error:", e)
 
+    end_all_sessions(session.get("user_id"))
     session.clear()
 
     return jsonify({
@@ -6600,15 +6645,29 @@ def update_tanker_status(operator_id, status):
 def add_stp():
     stps = load_stps()
 
+    try:
+        stp_id = str(request.form["id"]).strip()[:40]
+        stp_name = str(request.form["name"]).strip()[:120]
+        latitude = security.finite_float(request.form["lat"], -90, 90)
+        longitude = security.finite_float(request.form["lon"], -180, 180)
+        capacity = security.finite_float(request.form["capacity"], 0, 10_000)
+    except (KeyError, TypeError, ValueError):
+        return "Enter a plant ID, name, valid coordinates and capacity.", 400
+
+    if not stp_id or not stp_name:
+        return "Enter a plant ID and name.", 400
+    if any(str(s.get("stp_id")).strip().lower() == stp_id.lower() for s in stps):
+        return "A plant with that ID already exists.", 400
+
     new_stp = {
-        "stp_id": request.form["id"],
-        "stp_name": request.form["name"],
-        "latitude": float(request.form["lat"]),
-        "longitude": float(request.form["lon"]),
+        "stp_id": stp_id,
+        "stp_name": stp_name,
+        "latitude": latitude,
+        "longitude": longitude,
         "technology": "Manual",
-        "total_capacity_mld": float(request.form["capacity"]),
+        "total_capacity_mld": capacity,
         "current_load_mld": 0.0,
-        "available_capacity_mld": float(request.form["capacity"]),
+        "available_capacity_mld": capacity,
         "treatment_cost_per_kl": 5.0,
         "quality_grade": "General",
 
@@ -6911,7 +6970,7 @@ def api_search_place():
             }), 400
 
     try:
-        required_kld = float(request.args.get("required_kld", 0) or 0)
+        required_kld = security.finite_float(request.args.get("required_kld", 0) or 0, 0, 10_000_000)
     except (TypeError, ValueError):
         required_kld = 0.0
 
@@ -7161,8 +7220,8 @@ def resolve_delivery_coordinates(data):
 
     try:
         if lat is not None and lon is not None:
-            lat_value = float(lat)
-            lon_value = float(lon)
+            lat_value = security.finite_float(lat, -90, 90)
+            lon_value = security.finite_float(lon, -180, 180)
 
             # 0,0 is not a valid delivery location for this application.
             # Treat it as missing so an older/broken field does not override
@@ -7241,7 +7300,7 @@ def create_order():
     # DEMAND REQUIREMENTS
     # -------------------------------------------------------------
     try:
-        requested_kld = float(data.get("quantity_kld") or 0)
+        requested_kld = security.finite_float(data.get("quantity_kld") or 0, maximum=10_000_000)
     except (TypeError, ValueError):
         return jsonify({"error": "Invalid quantity"}), 400
 
@@ -8440,7 +8499,8 @@ def track_order():
 
     def visible(row):
         if role in ADMIN_ROLES:
-            return True
+            # approvals-only admins don't see orders (pentest PT-05)
+            return "orders" in admin_sections()
         if role == "stp":
             return bool(own_stp_id) and str(row.get("stp_id") or "").strip() == own_stp_id
         return buyer_owns_order(row)
@@ -8741,7 +8801,7 @@ def update_capacity():
     if denied:
         return denied
     try:
-        new_capacity = float(request.form["available_capacity_mld"])
+        new_capacity = security.finite_float(request.form["available_capacity_mld"], 0, 10_000)
         if new_capacity < 0:
             raise ValueError
     except (KeyError, TypeError, ValueError):
@@ -10375,7 +10435,7 @@ def api_tanker_route():
         try:
             if value in (None, ""):
                 return None
-            return float(value)
+            return security.finite_float(value, -180, 180)
         except (TypeError, ValueError):
             return None
 
@@ -10402,6 +10462,18 @@ def api_tanker_route():
                     order = row
                     break
 
+    # Only jobs offered or assigned to this operator: the delivery point is
+    # the buyer's location (pentest PT-06: any tanker could read any order's).
+    def mine(row):
+        me = str(session.get("tanker_operator_id") or "").strip()
+        return bool(me) and me in (
+            str(row.get("offered_operator_id") or "").strip(),
+            str(row.get("assigned_operator_id") or "").strip(),
+        )
+
+    if order is not None and not mine(order):
+        order = None
+
     transfer = None
     if request_type == "stp_transfer":
         ensure_stp_transfers_file()
@@ -10415,6 +10487,9 @@ def api_tanker_route():
                 if str(row.get("transfer_id") or "").strip() == order_id:
                     transfer = row
                     break
+
+    if transfer is not None and not mine(transfer):
+        transfer = None
 
     if start_lat is None or start_lon is None:
         if request_type == "stp_transfer" and transfer:
@@ -10969,6 +11044,13 @@ def safe_user_value(user, field_name, default=""):
     return str(value).strip()
 
 def ensure_stp_transfers_file():
+    """Runs under the cross-process data lock (re-entrant), so it is safe
+    from lock-free endpoints too (SECURITY pentest PT-10)."""
+    with security.data_lock():
+        return _ensure_stp_transfers_file_unlocked()
+
+
+def _ensure_stp_transfers_file_unlocked():
     """Create or update the STP-to-STP transfer request CSV schema."""
 
     # Create the file if it does not exist or is empty
@@ -13707,11 +13789,11 @@ def update_pricing():
         return denied
 
     try:
-        base_price = float(data.get("base_price_per_kld"))
-        peak = float(data.get("peak_incentive"))
-        off_peak = float(data.get("off_peak_incentive"))
-        sustainability = float(data.get("sustainability_credit"))
-        reliability = float(data.get("reliability_bonus"))
+        base_price = security.finite_float(data.get("base_price_per_kld"), 0, 100_000)
+        peak = security.finite_float(data.get("peak_incentive"), 0, 100_000)
+        off_peak = security.finite_float(data.get("off_peak_incentive"), 0, 100_000)
+        sustainability = security.finite_float(data.get("sustainability_credit"))
+        reliability = security.finite_float(data.get("reliability_bonus"))
 
         if base_price < 0 or peak < 0 or off_peak < 0:
             raise ValueError
@@ -15300,7 +15382,8 @@ def timeout_worker():
     while True:
 
         try:
-            process_expired_order_offers()
+            with security.data_lock():
+                process_expired_order_offers()
 
         except Exception as e:
             print(
@@ -15309,7 +15392,8 @@ def timeout_worker():
             )
 
         try:
-            process_expired_transfer_offers()
+            with security.data_lock():
+                process_expired_transfer_offers()
 
         except Exception as e:
             print(
@@ -15401,20 +15485,18 @@ def admin_remove_tanker_vehicle(operator_id, vehicle_id):
     removed, error = remove_tanker_vehicle(operator_id, vehicle_id)
 
     if error:
-        notice = {"fleet_error": error}
+        flash(error, "error")
     else:
-        notice = {
-            "fleet_notice": (
-                f"Removed {removed.get('registration_number') or vehicle_id} "
-                "from the fleet."
-            )
-        }
+        flash(
+            f"Removed {removed.get('registration_number') or vehicle_id} "
+            "from the fleet.",
+            "notice"
+        )
 
     return redirect(
         url_for(
             "admin_tanker_operator_details",
-            operator_id=operator_id,
-            **notice
+            operator_id=operator_id
         )
     )
 
@@ -16041,8 +16123,8 @@ def update_tanker_location():
     data = request.get_json(silent=True) or {}
 
     try:
-        latitude = float(data.get("latitude"))
-        longitude = float(data.get("longitude"))
+        latitude = security.finite_float(data.get("latitude"), -90, 90)
+        longitude = security.finite_float(data.get("longitude"), -180, 180)
     except (TypeError, ValueError):
         return jsonify({"success": False, "error": "Invalid coordinates"}), 400
 

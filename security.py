@@ -45,38 +45,55 @@ ACCOUNT_LOGIN_LIMIT = (20, 900)
 
 
 class RateLimiter:
-    """Sliding-window counter per key, in memory and thread-safe."""
+    """Sliding-window counter per key, shared by every gunicorn worker in the
+    container through a small SQLite file (pentest PT-02: in-memory counters
+    were per worker, so 2 workers allowed nearly twice the limit)."""
 
-    def __init__(self, max_keys=50_000):
-        self._hits = {}
-        self._lock = threading.Lock()
-        self._max_keys = max_keys
+    def __init__(self, path=None):
+        import os
+        import tempfile
+        self.path = path or os.path.join(tempfile.gettempdir(), "reflow-ratelimit.sqlite3")
+        self._local = threading.local()
+        self._calls = 0
+
+    def _conn(self):
+        import os
+        import sqlite3
+        conn = getattr(self._local, "conn", None)
+        if conn is None or getattr(self._local, "pid", None) != os.getpid():
+            conn = sqlite3.connect(self.path, timeout=5, isolation_level=None)
+            conn.execute("pragma journal_mode=wal")
+            conn.execute("create table if not exists hits (k text not null, t real not null)")
+            conn.execute("create index if not exists hits_k_t on hits (k, t)")
+            self._local.conn, self._local.pid = conn, os.getpid()
+        return conn
 
     def hit(self, key, limit, window):
         """Record one request. Returns seconds to wait, or 0 if allowed."""
-        now = time.monotonic()
-        with self._lock:
-            hits = self._hits.get(key)
-            if hits is None:
-                if len(self._hits) >= self._max_keys:
-                    self._prune(now)
-                hits = self._hits[key] = deque()
-            while hits and hits[0] <= now - window:
-                hits.popleft()
-            if len(hits) >= limit:
-                return max(1, int(hits[0] + window - now) + 1)
-            hits.append(now)
+        import sqlite3
+        now = time.time()
+        try:
+            conn = self._conn()
+            conn.execute("begin immediate")
+            try:
+                conn.execute("delete from hits where k = ? and t <= ?", (key, now - window))
+                count, first = conn.execute("select count(*), min(t) from hits where k = ?", (key,)).fetchone()
+                if count >= limit:
+                    return max(1, int(first + window - now) + 1)
+                conn.execute("insert into hits (k, t) values (?, ?)", (key, now))
+                self._calls += 1
+                if self._calls % 500 == 0:
+                    conn.execute("delete from hits where t <= ?", (now - 3600,))
+                return 0
+            finally:
+                conn.execute("commit")
+        except sqlite3.Error as e:
+            # Never take the site down because the counter file is busy.
+            print("SECURITY rate limiter unavailable:", type(e).__name__, e, flush=True)
             return 0
 
-    def _prune(self, now, longest_window=3600):
-        for key in [k for k, v in self._hits.items() if not v or v[-1] <= now - longest_window]:
-            del self._hits[key]
-        if len(self._hits) >= self._max_keys:
-            self._hits.clear()
-
     def reset(self):
-        with self._lock:
-            self._hits.clear()
+        self._conn().execute("delete from hits")
 
 
 limiter = RateLimiter()
@@ -139,6 +156,36 @@ def check_rate_limit():
     return None
 
 
+MAX_JSON_DEPTH = 64
+
+
+def json_depth_exceeds(raw, limit=MAX_JSON_DEPTH):
+    """True when brackets nest deeper than `limit` (strings skipped). Linear
+    scan; stops Python's json parser from hitting its recursion limit
+    (pentest PT-01: a 200 KB "[[[[…" body gave a 500)."""
+    if raw.count(b"[") + raw.count(b"{") <= limit:   # fast path: can't be deeper
+        return False
+    depth = 0
+    in_string = escaped = False
+    for byte in raw:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif byte == 0x5C:      # backslash
+                escaped = True
+            elif byte == 0x22:      # quote
+                in_string = False
+        elif byte == 0x22:
+            in_string = True
+        elif byte in (0x5B, 0x7B):  # [ {
+            depth += 1
+            if depth > limit:
+                return True
+        elif byte in (0x5D, 0x7D):
+            depth -= 1
+    return False
+
+
 def reject_oversized_body():
     """Refuse a too-large body before any view runs. (Werkzeug also enforces
     MAX_CONTENT_LENGTH while reading, but some views catch every exception and
@@ -146,6 +193,9 @@ def reject_oversized_body():
     length = request.content_length
     if length is not None and length > MAX_CONTENT_LENGTH:
         return make_response("Request body too large.", 413)
+    if request.is_json and length:
+        if json_depth_exceeds(request.get_data(cache=True)):
+            return make_response(jsonify({"success": False, "error": "Request body is nested too deeply."}), 400)
     return None
 
 
@@ -296,6 +346,113 @@ def set_security_headers(response):
     return response
 
 
+# ---------------------------------------------------------------------------
+# Pentest PT-10: one cross-process data lock
+# The app keeps its data as whole files/tables and updates them read-modify-
+# write. gunicorn runs several worker processes, and threading locks don't
+# reach across processes, so two requests in different workers could each
+# read the old table and the second write silently undid the first. Every
+# request that may change data now runs under this file lock (shared by all
+# workers and the background timeout worker in the container). The app runs
+# one replica (MAX_REPLICAS=1); scaling out needs a database lock instead.
+# ---------------------------------------------------------------------------
+
+import contextlib as _contextlib
+import threading as _threading
+
+DATA_LOCK_TIMEOUT = 30
+_lock_state = _threading.local()
+
+# Endpoints proven (call-graph check in the pentest) to never write data, plus
+# slow ones that take the lock themselves around their only write.
+LOCK_FREE_ENDPOINTS = {
+    "static", "health", "home", "current_user", "logout", "api_logout", "api_tanker_status",
+    "chatbot", "supply_ocems", "api_ocems_summary", "api_demand_ocems",
+    "api_ocems_export_start", "api_ocems_export_status",
+    # self-locking: login/signup (plant request), OCEMS connect (vendor test
+    # first), geocoding and routing (auto_reset_capacity / transfers file)
+    "login", "api_login", "signup", "api_signup", "api_ocems_connection_submit",
+    "api_search_place", "api_tanker_route",
+}
+
+
+class DataLockTimeout(Exception):
+    pass
+
+
+def _lock_path():
+    import os
+    import tempfile
+    return os.path.join(tempfile.gettempdir(), "reflow-data.lock")
+
+
+def acquire_data_lock(timeout=DATA_LOCK_TIMEOUT):
+    """Take the lock (re-entrant within a thread)."""
+    depth = getattr(_lock_state, "depth", 0)
+    if depth:
+        _lock_state.depth = depth + 1
+        return
+    try:
+        import fcntl
+    except ImportError:          # Windows dev machine: single process
+        _lock_state.depth, _lock_state.fd = 1, None
+        return
+    handle = open(_lock_path(), "a+")
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            break
+        except BlockingIOError:
+            if time.monotonic() > deadline:
+                handle.close()
+                raise DataLockTimeout()
+            time.sleep(0.01)
+    _lock_state.depth, _lock_state.fd = 1, handle
+
+
+def release_data_lock():
+    depth = getattr(_lock_state, "depth", 0)
+    if depth > 1:
+        _lock_state.depth = depth - 1
+        return
+    if depth == 1:
+        handle = getattr(_lock_state, "fd", None)
+        _lock_state.depth, _lock_state.fd = 0, None
+        if handle is not None:
+            import fcntl
+            fcntl.flock(handle, fcntl.LOCK_UN)
+            handle.close()
+
+
+@_contextlib.contextmanager
+def data_lock(timeout=DATA_LOCK_TIMEOUT):
+    acquire_data_lock(timeout)
+    try:
+        yield
+    finally:
+        release_data_lock()
+
+
+def lock_request():
+    from flask import g
+    if (request.endpoint or "static") in LOCK_FREE_ENDPOINTS:
+        return None
+    try:
+        acquire_data_lock()
+    except DataLockTimeout:
+        audit("data_lock_timeout", endpoint=request.endpoint)
+        return make_response("The server is busy. Try again in a moment.", 503)
+    g._holds_data_lock = True
+    return None
+
+
+def unlock_request(_exc=None):
+    from flask import g
+    if g.pop("_holds_data_lock", False):
+        release_data_lock()
+
+
 def init_app(app):
     # Item 11: exactly one proxy (the Azure Container Apps ingress) sits in
     # front of gunicorn. Trust only the last X-Forwarded-For entry (the one the
@@ -308,6 +465,8 @@ def init_app(app):
     app.before_request(reject_oversized_body)
     app.before_request(check_same_origin)
     app.before_request(check_rate_limit)
+    app.before_request(lock_request)
+    app.teardown_request(unlock_request)
     app.after_request(set_cache_headers)
     app.after_request(set_security_headers)
 
@@ -482,3 +641,22 @@ def decrypt_mfa_secret(token):
         return _mfa_fernet().decrypt(str(token or "").encode()).decode()
     except Exception:
         return None
+
+
+# ---------------------------------------------------------------------------
+# Pentest PT-08: numbers from requests must be finite
+# Python's float() accepts "nan", "inf" and "1e309"; NaN slips past every
+# "< 0" check and is written to JSON as NaN, which browsers can't parse.
+# ---------------------------------------------------------------------------
+
+def finite_float(value, minimum=None, maximum=None):
+    """float(value), but ValueError for NaN/Infinity or outside the range."""
+    import math
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError("not a finite number")
+    if minimum is not None and number < minimum:
+        raise ValueError("too small")
+    if maximum is not None and number > maximum:
+        raise ValueError("too large")
+    return number

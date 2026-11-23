@@ -33,7 +33,8 @@ def test_signup_files_pending_request_and_cannot_sign_in(client, fresh):
 
 def test_web_signup_and_login_also_wait(client, fresh):
     res = client.post("/signup", data=dict(SIGNUP, email="web-plant@example.com"))
-    assert res.status_code == 302 and "approve" in res.headers["Location"]
+    assert res.status_code == 302 and res.headers["Location"].endswith("/login")
+    assert b"approve your access" in client.get("/login").data
     page = client.post("/login", data={"login_identifier": "web-plant@example.com", "password": "plant-pass-1"})
     assert b"waiting for approval" in page.data
 
