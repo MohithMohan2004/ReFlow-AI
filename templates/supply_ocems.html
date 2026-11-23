@@ -478,7 +478,9 @@
         COD: { name: "Chemical oxygen demand", unit: "mg/L", color: "#b45309", icon: '<path d="M10 2v6.3a6 6 0 1 0 4 0V2"/><path d="M8 2h8"/>' },
         TSS: { name: "Total suspended solids", unit: "mg/L", color: "#0d9488", icon: '<circle cx="7" cy="8" r="2"/><circle cx="16" cy="6" r="1.5"/><circle cx="12" cy="13" r="2.5"/><circle cx="6" cy="17" r="1.5"/><circle cx="17" cy="16" r="2"/>' }
     };
-    function meta(p) { return META[p] || { name: p, unit: "", color: "#1463d6", icon: '<circle cx="12" cy="12" r="8"/>' }; }
+    // Parameter names come from the vendor's CSV header: escape before innerHTML.
+    function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
+    function meta(p) { return Object.prototype.hasOwnProperty.call(META, p) ? META[p] : { name: p, unit: "", color: "#1463d6", icon: '<circle cx="12" cy="12" r="8"/>' }; }
 
     // "6.5 - 8.5" -> {min, max}; "<= 10" -> {max}; ">= 5" -> {min}
     function parseLimit(text) {
@@ -540,9 +542,9 @@
         var total = okList.length + badList.length;
         verdict.innerHTML =
             '<div class="score"><b class="num">' + okList.length + "/" + total + '</b><span>parameters within limit</span></div>' +
-            "<p>" + (badList.length ? "Latest reading exceeds the limit for " + badList.join(", ") + ". Review treatment before dispatching water." : "All parameters are within the permitted range in the latest reading.") + "</p>" +
-            '<div class="chips">' + okList.map(function (p) { return '<span class="chip-ok">' + p + " ✓</span>"; }).join("") +
-            badList.map(function (p) { return '<span class="chip-bad">' + p + " ✕</span>"; }).join("") + "</div>";
+            "<p>" + (badList.length ? "Latest reading exceeds the limit for " + badList.map(esc).join(", ") + ". Review treatment before dispatching water." : "All parameters are within the permitted range in the latest reading.") + "</p>" +
+            '<div class="chips">' + okList.map(function (p) { return '<span class="chip-ok">' + esc(p) + " ✓</span>"; }).join("") +
+            badList.map(function (p) { return '<span class="chip-bad">' + esc(p) + " ✕</span>"; }).join("") + "</div>";
     } else {
         verdict.innerHTML = '<div class="score"><b>—</b></div><p>The file has no readings yet.</p>';
     }
@@ -598,9 +600,9 @@
                     (diff > 0 ? "▲ " : "▼ ") + show(Math.abs(diff), p) + "</span>";
             }
         }
-        return '<button type="button" class="param" data-param="' + p + '" aria-pressed="' + (p === selected) + '" style="--c:' + m.color + '">' +
+        return '<button type="button" class="param" data-param="' + esc(p) + '" aria-pressed=""' + (p === selected) + '" style="--c:' + m.color + '">' +
             '<div class="param-head"><div class="param-name"><span class="ico"><svg class="i" viewBox="0 0 24 24">' + m.icon + "</svg></span>" +
-            "<span><strong>" + p + "</strong><small>" + m.name + "</small></span></div>" + pill + "</div>" +
+            "<span><strong>" + esc(p) + "</strong><small>" + esc(m.name) + "</small></span></div>" + pill + "</div>" +
             '<div class="reading"><b class="num">' + show(v, p) + "</b><span>" + (m.unit || "") + "</span>" + delta + "</div>" +
             gauge(p, v) + sparkline(p) + "</button>";
     }).join("");
@@ -748,7 +750,7 @@
         var vals = reported.map(function (r) { return r.v[p]; }).filter(function (v) { return v !== null; });
         var ok = vals.filter(function (v) { return within(p, v); }).length;
         var pct = vals.length ? Math.round((ok / vals.length) * 100) : 0;
-        return '<div class="comp-row"><div class="top"><span>' + p + '</span><span class="num"><b>' + pct + "%</b> · " + ok + "/" + vals.length + " hrs</span></div>" +
+        return '<div class="comp-row"><div class="top"><span>' + esc(p) + '</span><span class="num"><b>' + pct + "%</b> · " + ok + "/" + vals.length + " hrs</span></div>" +
             '<div class="track"><div class="fill" style="width:' + pct + '%"></div></div></div>';
     }).join("");
 

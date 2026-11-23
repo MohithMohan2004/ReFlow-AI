@@ -691,12 +691,17 @@ def _split_label(label):
     return label, unit
 
 
+# Characters a parameter name may keep. Names are vendor-controlled and end up
+# in pages, so markup characters (< > " ' & `) never survive.
+UNSAFE_LABEL_CHARS = re.compile(r"[^\w .,/%()\[\]+°µ³²-]")
+
+
 def _canonical(label):
     base = re.sub(r"[\(\[].*$", "", str(label)[:MAX_LABEL_LENGTH]).strip()
     for pattern, name in CANONICAL:
         if pattern.search(base):
             return name
-    return base or label
+    return UNSAFE_LABEL_CHARS.sub("", base or str(label)[:MAX_LABEL_LENGTH]).strip() or "Parameter"
 
 
 def _number(value):
