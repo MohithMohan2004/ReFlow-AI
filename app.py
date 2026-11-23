@@ -16,6 +16,7 @@ import os
 import math
 import random
 import re
+import secrets
 import requests
 import pandas as pd
 import csv
@@ -10314,16 +10315,12 @@ def upload_tanker_vehicle_document(
 
     document_id = (
         "DOC-"
-        + uuid.uuid4().hex[:12].upper()
+        + secrets.token_hex(6).upper()
     )
 
-
-    stored_filename = (
-        f"{operator_id}_"
-        f"{vehicle_id}_"
-        f"{document_type}_"
-        f"{uuid.uuid4().hex[:8]}.pdf"
-    )
+    # A random name: nothing about the operator or vehicle, nothing
+    # guessable. The CSV row maps it back to its vehicle.
+    stored_filename = f"doc_{secrets.token_hex(16)}.pdf"
 
 
     stored_filename = secure_filename(
