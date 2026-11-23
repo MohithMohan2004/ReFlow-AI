@@ -151,6 +151,12 @@ def set_cache_headers(response):
 
 
 def init_app(app):
+    # Item 11: exactly one proxy (the Azure Container Apps ingress) sits in
+    # front of gunicorn. Trust only the last X-Forwarded-For entry (the one the
+    # ingress appended) and X-Forwarded-Proto; never the forwarded Host.
+    from werkzeug.middleware.proxy_fix import ProxyFix
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=0, x_port=0, x_prefix=0)
+
     app.config["MAX_CONTENT_LENGTH"] = MAX_CONTENT_LENGTH
     app.before_request(reject_oversized_body)
     app.before_request(check_rate_limit)
