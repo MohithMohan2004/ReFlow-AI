@@ -150,6 +150,49 @@ def set_cache_headers(response):
     return response
 
 
+# ---------------------------------------------------------------------------
+# Extra D: CSRF. Every state-changing request from a browser must come from
+# this site. Browsers always send Origin (or at least Referer) on cross-site
+# POSTs, so a forged request is refused. Requests with neither header come
+# from non-browser clients (scripts, the Flutter client), which carry no
+# victim's cookies; SameSite=Lax is the second layer.
+# ---------------------------------------------------------------------------
+
+SAFE_METHODS = {"GET", "HEAD", "OPTIONS", "TRACE"}
+
+
+def _trusted_origins():
+    import os
+    extra = os.getenv("CSRF_TRUSTED_ORIGINS", "")
+    return {o.strip().rstrip("/").lower() for o in extra.split(",") if o.strip()}
+
+
+def check_same_origin():
+    if request.method in SAFE_METHODS:
+        return None
+    from urllib.parse import urlsplit
+    origin = request.headers.get("Origin")
+    source = origin if origin is not None else request.headers.get("Referer")
+    if source is None:
+        return None
+    source = source.strip()
+    parts = urlsplit(source)
+    ok = (
+        source.lower() != "null"
+        and parts.scheme in ("http", "https")
+        and (
+            parts.netloc.lower() == request.host.lower()
+            or f"{parts.scheme}://{parts.netloc}".lower() in _trusted_origins()
+        )
+    )
+    if ok:
+        return None
+    message = "This request came from another site and was blocked."
+    if request.path.startswith("/api/") or request.is_json:
+        return make_response(jsonify({"success": False, "error": message, "message": message}), 403)
+    return make_response(message, 403)
+
+
 def init_app(app):
     # Item 11: exactly one proxy (the Azure Container Apps ingress) sits in
     # front of gunicorn. Trust only the last X-Forwarded-For entry (the one the
@@ -159,6 +202,7 @@ def init_app(app):
 
     app.config["MAX_CONTENT_LENGTH"] = MAX_CONTENT_LENGTH
     app.before_request(reject_oversized_body)
+    app.before_request(check_same_origin)
     app.before_request(check_rate_limit)
     app.after_request(set_cache_headers)
 

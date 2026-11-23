@@ -6168,7 +6168,7 @@ def admin_dashboard():
             documents_by_vehicle
     )
 
-@app.route("/admin/tanker/<operator_id>/status/<status>")
+@app.route("/admin/tanker/<operator_id>/status/<status>", methods=["POST"])
 @admin_required("approvals")
 def update_tanker_status(operator_id, status):
 
@@ -6267,7 +6267,7 @@ def add_stp():
 # =========================
 # DELETE STP
 # =========================
-@app.route("/admin/delete_stp/<stp_id>")
+@app.route("/admin/delete_stp/<stp_id>", methods=["POST"])
 @admin_required("plants")
 def delete_stp(stp_id):
     stps = load_stps()
@@ -11029,7 +11029,7 @@ def stp_order_tracking(order_id):
 
     return jsonify({"error": "Order not found"}), 404
 
-@app.route("/admin/stp/<registration_id>/status/<status>")
+@app.route("/admin/stp/<registration_id>/status/<status>", methods=["POST"])
 @admin_required("approvals")
 def update_stp_status(registration_id, status):
 

@@ -580,9 +580,9 @@
                                             </div>
                                         </td>
                                         <td><div class="actions">
-                                            <a class="btn sm ghost-danger" href="/admin/delete_stp/{{ stp.stp_id }}#plants" data-confirm="Delete {{ stp.stp_name }} ({{ stp.stp_id }}) from the network? This can't be undone.">
+                                            <form method="post" action="/admin/delete_stp/{{ stp.stp_id }}#plants" data-confirm="Delete {{ stp.stp_name }} ({{ stp.stp_id }}) from the network? This can't be undone."><button type="submit" class="btn sm ghost-danger">
                                                 <svg class="i" viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/></svg>Delete
-                                            </a>
+                                            </button></form>
                                         </div></td>
                                     </tr>
                                 {% else %}
@@ -624,8 +624,8 @@
                                         <td>{{ status_pill(r.verification_status or "Pending") }}</td>
                                         <td><div class="actions">
                                             {% if st == "pending" %}
-                                                <a class="btn sm approve" href="/admin/stp/{{ r.registration_id }}/status/approved#approvals" data-confirm="Approve {{ r.stp_name }}? It will join the network and can receive orders."><svg class="i" viewBox="0 0 24 24"><path d="m5 12 5 5 9-10"/></svg>Approve</a>
-                                                <a class="btn sm reject" href="/admin/stp/{{ r.registration_id }}/status/rejected#approvals" data-confirm="Reject the registration for {{ r.stp_name }}?"><svg class="i" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>Reject</a>
+                                                <form method="post" action="/admin/stp/{{ r.registration_id }}/status/approved#approvals" data-confirm="Approve {{ r.stp_name }}? It will join the network and can receive orders."><button type="submit" class="btn sm approve"><svg class="i" viewBox="0 0 24 24"><path d="m5 12 5 5 9-10"/></svg>Approve</button></form>
+                                                <form method="post" action="/admin/stp/{{ r.registration_id }}/status/rejected#approvals" data-confirm="Reject the registration for {{ r.stp_name }}?"><button type="submit" class="btn sm reject"><svg class="i" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>Reject</button></form>
                                             {% else %}
                                                 <span style="font-size:12.5px;color:var(--faint);">Reviewed</span>
                                             {% endif %}
@@ -666,8 +666,8 @@
                                         <td>{{ status_pill(op.verification_status or "Pending") }}</td>
                                         <td><div class="actions">
                                             {% if st == "pending" %}
-                                                <a class="btn sm approve" href="/admin/tanker/{{ op.operator_id }}/status/approved#approvals" data-confirm="Approve {{ op.operator_name }} as a tanker partner?"><svg class="i" viewBox="0 0 24 24"><path d="m5 12 5 5 9-10"/></svg>Approve</a>
-                                                <a class="btn sm reject" href="/admin/tanker/{{ op.operator_id }}/status/rejected#approvals" data-confirm="Reject {{ op.operator_name }}?"><svg class="i" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>Reject</a>
+                                                <form method="post" action="/admin/tanker/{{ op.operator_id }}/status/approved#approvals" data-confirm="Approve {{ op.operator_name }} as a tanker partner?"><button type="submit" class="btn sm approve"><svg class="i" viewBox="0 0 24 24"><path d="m5 12 5 5 9-10"/></svg>Approve</button></form>
+                                                <form method="post" action="/admin/tanker/{{ op.operator_id }}/status/rejected#approvals" data-confirm="Reject {{ op.operator_name }}?"><button type="submit" class="btn sm reject"><svg class="i" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>Reject</button></form>
                                             {% endif %}
                                             <a class="btn sm" href="{{ url_for('admin_tanker_operator_details', operator_id=op.operator_id) }}">Details<svg class="i" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg></a>
                                         </div></td>
