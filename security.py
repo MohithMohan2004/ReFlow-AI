@@ -81,6 +81,23 @@ class RateLimiter:
 limiter = RateLimiter()
 
 
+def audit(event, **fields):
+    """One line per security event on stdout (collected by Azure logs).
+    Values are cut short and stripped of control characters so a crafted
+    email or path can't forge log lines. Never pass passwords or keys."""
+    from flask import has_request_context, session
+    data = {"event": event}
+    if has_request_context():
+        data.update(ip=client_ip(), method=request.method, path=request.path,
+                    user=session.get("user_id") or "-", role=session.get("role") or "-")
+    data.update(fields)
+    clean = " ".join(
+        f"{k}={''.join(ch if ch.isprintable() and ch != ' ' else '_' for ch in str(v))[:120]}"
+        for k, v in data.items()
+    )
+    print("SECURITY " + clean, flush=True)
+
+
 def client_ip():
     """The caller's address. ProxyFix (item 11) has already replaced
     remote_addr with the address the Azure ingress saw."""
@@ -116,6 +133,7 @@ def check_rate_limit():
         if account:
             wait = limiter.hit(f"login:acct:{account}", *ACCOUNT_LOGIN_LIMIT)
     if wait:
+        audit("rate_limited", endpoint=request.endpoint)
         return _too_many(wait)
     return None
 
@@ -187,6 +205,7 @@ def check_same_origin():
     )
     if ok:
         return None
+    audit("csrf_blocked", origin=source)
     message = "This request came from another site and was blocked."
     if request.path.startswith("/api/") or request.is_json:
         return make_response(jsonify({"success": False, "error": message, "message": message}), 403)

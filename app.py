@@ -161,6 +161,7 @@ def login_required(role=None):
             # do inside the console is checked by admin_required().
             allowed = ADMIN_ROLES if wanted == "admin" else {wanted}
             if role is not None and user_role not in allowed:
+                security.audit("permission_denied", need=wanted)
                 return redirect(url_for(ROLE_HOME_ENDPOINT[user_role]))
 
             return view_func(*args, **kwargs)
@@ -202,6 +203,7 @@ def admin_required(section):
         @wraps(view_func)
         def wrapped_view(*args, **kwargs):
             if section not in admin_sections():
+                security.audit("permission_denied", need=f"admin:{section}")
                 if request.method == "GET":
                     return redirect(url_for("admin_dashboard"))
                 return "Your admin role does not allow this action.", 403
@@ -2550,6 +2552,7 @@ def login():
     login_identifier = security.normalize_identity(login_identifier)
 
     if security.login_fields_invalid(login_identifier, password):
+        security.audit("login_failed", account=login_identifier, reason="input_too_long")
         return render_template(
             "login.html",
             login_error="Invalid email or password."
@@ -2952,6 +2955,8 @@ def login():
         print("")
 
         session.clear()
+
+        security.audit("login_failed", account=login_identifier, reason=getattr(e, "code", "") or type(e).__name__)
 
         return render_template(
             "login.html",
@@ -3984,6 +3989,7 @@ def api_login():
     login_identifier = security.normalize_identity(login_identifier)
 
     if security.login_fields_invalid(login_identifier, password):
+        security.audit("login_failed", account=login_identifier, reason="input_too_long")
         return jsonify({
             "success": False,
             "message": "Invalid email or password."
@@ -4129,6 +4135,7 @@ def api_login():
 
     except Exception as e:
         print("Flutter API login error:", e)
+        security.audit("login_failed", account=login_identifier, reason=getattr(e, "code", "") or type(e).__name__)
 
         return jsonify({
             "success": False,
