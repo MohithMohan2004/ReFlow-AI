@@ -344,7 +344,11 @@ def has_request_expired(request_created_at):
 app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=7)
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
-app.config["SESSION_COOKIE_SECURE"] = False
+# Secure by default (HTTPS on Azure). Browsers also accept Secure cookies on
+# http://localhost; set SESSION_COOKIE_SECURE=0 only for plain-HTTP setups
+# such as the Android emulator talking to http://10.0.2.2.
+app.config["SESSION_COOKIE_SECURE"] = security.env_flag("SESSION_COOKIE_SECURE", True)
+app.config["SESSION_COOKIE_NAME"] = "session"
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 

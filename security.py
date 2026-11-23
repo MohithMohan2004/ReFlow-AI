@@ -238,3 +238,18 @@ def identity_error(email, username=None):
     if username is not None and not USERNAME_RE.fullmatch(username):
         return "Usernames are 4-32 characters: letters, digits, dot, underscore or hyphen."
     return None
+
+
+# ---------------------------------------------------------------------------
+# Extra B: settings from the environment
+# ---------------------------------------------------------------------------
+
+def env_flag(name, default):
+    """Read a yes/no setting: 0/false/no/off -> False, 1/true/yes/on -> True."""
+    import os
+    value = str(os.getenv(name, "")).strip().lower()
+    if value in ("0", "false", "no", "off"):
+        return False
+    if value in ("1", "true", "yes", "on"):
+        return True
+    return default
