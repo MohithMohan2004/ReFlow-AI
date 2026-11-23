@@ -27,6 +27,7 @@ RATE_LIMITS = {
     "signup": ({"POST"}, 5, 600),
     "api_signup": ({"POST"}, 5, 600),
     "api_tanker_status": ({"POST"}, 10, 60),
+    "admin_mfa": ({"POST"}, 10, 60),
     "chatbot": ({"POST"}, 20, 60),
     "api_search_place": ({"GET"}, 30, 60),
     "api_tanker_route": ({"GET"}, 30, 60),
@@ -401,3 +402,83 @@ def env_flag(name, default):
     if value in ("1", "true", "yes", "on"):
         return True
     return default
+
+
+# ---------------------------------------------------------------------------
+# Admin two-step sign-in: TOTP (RFC 6238), standard library only.
+# Works with Google Authenticator, Microsoft Authenticator, Authy, 1Password…
+# ---------------------------------------------------------------------------
+
+TOTP_PERIOD = 30
+TOTP_DIGITS = 6
+MFA_MAX_FAILURES = 5
+MFA_LOCK_SECONDS = 15 * 60
+MFA_PENDING_SECONDS = 5 * 60
+ADMIN_SESSION_SECONDS = 12 * 3600
+
+
+def new_totp_secret():
+    import base64
+    import secrets
+    return base64.b32encode(secrets.token_bytes(20)).decode().rstrip("=")
+
+
+def totp_code(secret, step):
+    import base64
+    import hashlib
+    import hmac
+    import struct
+    key = base64.b32decode(secret + "=" * (-len(secret) % 8), casefold=True)
+    digest = hmac.new(key, struct.pack(">Q", step), hashlib.sha1).digest()
+    offset = digest[-1] & 0x0F
+    number = (struct.unpack(">I", digest[offset:offset + 4])[0] & 0x7FFFFFFF) % (10 ** TOTP_DIGITS)
+    return str(number).zfill(TOTP_DIGITS)
+
+
+def totp_match(secret, code, last_step=-1, now=None):
+    """The time step the code belongs to (now, or one step either side for
+    clock drift), or None. A step at or before last_step is refused, so a
+    code can't be used twice."""
+    import hmac
+    import time
+    code = "".join(ch for ch in str(code or "") if ch.isdigit())
+    if len(code) != TOTP_DIGITS:
+        return None
+    step = int((time.time() if now is None else now) // TOTP_PERIOD)
+    for candidate in (step - 1, step, step + 1):
+        if candidate <= int(last_step) or candidate < 0:
+            continue
+        if hmac.compare_digest(totp_code(secret, candidate), code):
+            return candidate
+    return None
+
+
+def otpauth_uri(secret, account):
+    from urllib.parse import quote
+    return (f"otpauth://totp/ReFlow:{quote(account)}?secret={secret}"
+            f"&issuer=ReFlow&digits={TOTP_DIGITS}&period={TOTP_PERIOD}")
+
+
+def _mfa_fernet():
+    import base64
+    import hashlib
+    import os
+    from cryptography.fernet import Fernet, MultiFernet
+    keys = []
+    for name in ("MFA_KEY_SECRET", "FLASK_SECRET_KEY"):
+        value = (os.getenv(name) or "").strip()
+        if value:
+            digest = hashlib.sha256(("reflow-admin-mfa:" + value).encode()).digest()
+            keys.append(Fernet(base64.urlsafe_b64encode(digest)))
+    return MultiFernet(keys)
+
+
+def encrypt_mfa_secret(secret):
+    return _mfa_fernet().encrypt(secret.encode()).decode()
+
+
+def decrypt_mfa_secret(token):
+    try:
+        return _mfa_fernet().decrypt(str(token or "").encode()).decode()
+    except Exception:
+        return None

@@ -25,9 +25,9 @@ def test_admin_claim_in_user_metadata_is_refused(client, app_module, claimed, ca
 def test_admin_from_app_metadata_works(client, app_module):
     app_module.supabase.auth.add_user("boss@example.com", "role-pass-1", app_metadata={"role": "superadmin"})
     res = client.post("/login", data={"login_identifier": "boss@example.com", "password": "role-pass-1"})
-    assert res.status_code == 302
+    assert res.status_code == 302 and res.headers["Location"].endswith("/admin/mfa")
     with client.session_transaction() as s:
-        assert s["role"] == "superadmin"
+        assert s["mfa_pending"]["values"]["role"] == "superadmin"   # admin after the code step
 
 
 def test_app_metadata_wins_over_edited_user_metadata(client, app_module):

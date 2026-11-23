@@ -9,7 +9,7 @@ from flask.sessions import SecureCookieSessionInterface
 from itsdangerous import URLSafeTimedSerializer
 
 ROOT = Path(__file__).resolve().parents[2]
-ADMIN = {"user_id": "attacker", "role": "superadmin"}
+ADMIN = {"user_id": "attacker", "role": "demand"}
 
 
 def _logged_in(client, cookie):

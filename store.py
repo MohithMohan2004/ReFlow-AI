@@ -470,6 +470,7 @@ CSV_FILES = {
     "database/tanker_vehicle_documents.csv": "tanker_vehicle_documents",
     "database/ocems_api_connections.csv": "ocems_api_connections",
     "database/stp_accounts.csv": "stp_accounts",
+    "database/admin_mfa.csv": "admin_mfa",
     "data/stp_pricing.csv": "stp_pricing",
     "database/stp_pricing.csv": "stp_pricing_fallback",
 }

@@ -198,5 +198,9 @@ def as_user(app_module):
     def make(**session_values):
         if session_values.get("role") == "stp" and session_values.get("user_id") and session_values.get("stp_id"):
             approve_plant(app_module, session_values["user_id"], session_values["stp_id"])
+        if session_values.get("role") in ("admin", "superadmin"):
+            # a real admin session exists only after the two-step code
+            session_values.setdefault("mfa_ok", True)
+            session_values.setdefault("auth_at", __import__("time").time())
         return login_as(app_module.app.test_client(), **session_values)
     return make
