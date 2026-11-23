@@ -1063,6 +1063,7 @@
                         </div>
 
 
+                        {% if can_manage_fleet %}
                         <form
                             class="remove-vehicle"
                             method="POST"
@@ -1072,6 +1073,7 @@
                         >
                             <button type="submit">Remove vehicle</button>
                         </form>
+                        {% endif %}
 
                     </div>
 

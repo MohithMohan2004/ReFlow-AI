@@ -14,7 +14,7 @@ import { num } from "../lib/format";
 import type { Stp } from "../lib/types";
 import "./landing.css";
 
-const HOME_FOR_ROLE: Record<string, string> = { demand: "/demand", stp: "/supply", tanker: "/tanker", admin: "/admin" };
+const HOME_FOR_ROLE: Record<string, string> = { demand: "/demand", stp: "/supply", tanker: "/tanker", admin: "/admin", superadmin: "/admin" };
 
 /** Grade → colour. Categorical only; status colours stay reserved. */
 const GRADES: { name: string; color: string }[] = [

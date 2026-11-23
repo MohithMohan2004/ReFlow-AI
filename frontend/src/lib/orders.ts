@@ -6,7 +6,7 @@ export function bucketOf(status?: string | null): Bucket {
   const s = String(status ?? "").toLowerCase();
   if (["pending", "offered", "new offer", "awaiting"].includes(s)) return "pending";
   if (["delivered", "completed"].includes(s)) return "completed";
-  if (["rejected", "cancelled", "canceled", "expired", "failed"].includes(s)) return "closed";
+  if (["rejected", "cancelled", "canceled", "expired", "failed", "delivery failed"].includes(s)) return "closed";
   return "active"; // Accepted, Assigned, Out for Delivery, Picked up…
 }
 

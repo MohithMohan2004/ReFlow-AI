@@ -3,7 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { Marker, Polyline, Popup } from "react-leaflet";
 import type { LatLngTuple } from "leaflet";
 import {
-  ArrowLeftRight, ArrowRight, CalendarClock, Check, ClipboardList, Droplets, Factory, Gauge, Inbox,
+  ArrowLeftRight, ArrowRight, CalendarClock, Check, Clock, ClipboardList, Droplets, Factory, Gauge, Inbox,
   MapPinned, Navigation, Pencil, Phone, Plus, RefreshCw, Timer, TrendingUp, X, Wifi,
 } from "lucide-react";
 import { AppShell } from "../components/AppShell";
@@ -35,6 +35,8 @@ interface TransferRow {
   transfer_id: string; source_stp_id?: string; source_stp_name: string; destination_stp_id?: string; destination_stp_name: string;
   quantity_kld: string; quality: string; water_type: string; distance_km: string; status: string; requested_at: string;
   tanker_status?: string; assigned_operator_name?: string;
+  accepted_at?: string; assigned_at?: string; eta_at?: string; delivered_at?: string;
+  failed_at?: string; failure_reason?: string; failure_note?: string; capacity_returned?: string;
   /** "incoming": another plant asks this one for water. "outgoing": this plant asked another one. */
   direction?: "incoming" | "outgoing";
 }
@@ -363,6 +365,7 @@ export default function Supply() {
                               <span>{when(t.requested_at)}</span>
                               {t.assigned_operator_name && <span>Tanker: {t.assigned_operator_name}</span>}
                             </div>
+                            <TransferProgress t={t} />
                           </div>
                           <div className="req-actions">
                             <button className="btn btn-sm btn-ghost" onClick={() => view({ kind: "transfer", id: t.transfer_id })}><MapPinned /> View info</button>
@@ -581,3 +584,52 @@ function RequestDialog({ me, stps, onClose, onSaved }: { me: Stp; stps: Stp[]; o
   );
 }
 
+
+/** Same keys as INCIDENT_REASONS in app.py. */
+const INCIDENT_LABELS: Record<string, string> = {
+  accident: "Road accident", breakdown: "Vehicle breakdown", road_blocked: "Road blocked or closed",
+  weather: "Flooding or severe weather", spill: "Water spilled or contaminated", other: "Other unforeseen event",
+};
+const clockTime = (v?: string) => {
+  const d = new Date(String(v ?? "").replace(" ", "T"));
+  return v && !Number.isNaN(d.getTime()) ? d.toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit", hour12: true }) : "";
+};
+
+/** Timestamps, expected arrival and failure details for one transfer. */
+function TransferProgress({ t }: { t: TransferRow }) {
+  const s = String(t.status ?? "").toLowerCase();
+  if (s === "delivery failed") {
+    const reason = INCIDENT_LABELS[t.failure_reason ?? ""] ?? t.failure_reason;
+    return (
+      <Notice tone="danger">
+        <strong>Delivery failed{reason ? `: ${reason}` : ""}</strong> · reported by the tanker {when(t.failed_at)}.
+        {t.failure_note && <> “{t.failure_note}”</>}
+        <br />
+        {t.capacity_returned === "True"
+          ? `The ${num(t.quantity_kld)} KLD reserved at ${isOutgoing(t) ? t.source_stp_name : "your plant"} went back to its free capacity. Request the water again if you still need it.`
+          : "No charge applies to plant transfers."}
+      </Notice>
+    );
+  }
+  const eta = s === "out for delivery" ? t.eta_at : "";
+  const etaMs = eta ? new Date(String(eta).replace(" ", "T")).getTime() - Date.now() : NaN;
+  const steps = [
+    t.accepted_at && `Accepted ${when(t.accepted_at)}`,
+    t.assigned_at && `On the way ${when(t.assigned_at)}`,
+    t.delivered_at && `Delivered ${when(t.delivered_at)}`,
+  ].filter(Boolean) as string[];
+  if (!steps.length && !eta) return null;
+  return (
+    <div className="transfer-progress">
+      {steps.length > 0 && <span className="muted">{steps.join(" · ")}</span>}
+      {eta && clockTime(eta) && (
+        <span className="transfer-eta">
+          <Clock size={13} />
+          {etaMs > 0
+            ? <>Arriving at {isOutgoing(t) ? "your plant" : t.destination_stp_name} around <b>{clockTime(eta)}</b> · in about {Math.round(etaMs / 60000)} min</>
+            : <>Expected by <b>{clockTime(eta)}</b> · running a little late</>}
+        </span>
+      )}
+    </div>
+  );
+}

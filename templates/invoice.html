@@ -175,6 +175,8 @@
         .timeline { list-style: none; margin: 0; padding: 0; display: grid; }
         .timeline li { position: relative; display: flex; gap: 12px; padding-bottom: 16px; }
         .timeline li:last-child { padding-bottom: 0; }
+        .timeline li.done.fail .dot { background: var(--bad); border-color: var(--bad); }
+        .timeline li.done.fail strong { color: var(--bad); }
         .timeline li:not(:last-child)::after { content: ""; position: absolute; left: 10px; top: 24px; bottom: 2px; width: 2px; border-radius: 2px; background: var(--line); }
         .timeline li.done:not(:last-child)::after { background: linear-gradient(var(--teal), #8fd8cf); }
         .timeline .dot { position: relative; z-index: 1; width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; flex: none; background: var(--surface); border: 2px solid var(--line-strong); }
@@ -271,7 +273,8 @@
 {% set status_l = status|lower %}
 {% set pay = (info.payment_status or "Pending") %}
 {% set needs_payment = info.is_draft or pay|lower == "pending" %}
-{% set closed = status_l in ["rejected", "expired", "cancelled"] %}
+{% set failed = status_l == "delivery failed" %}
+{% set closed = failed or status_l in ["rejected", "expired", "cancelled"] %}
 {% if closed %}{% set status_tone = "bad" %}
 {% elif status_l == "delivered" %}{% set status_tone = "ok" %}
 {% elif status_l == "pending" %}{% set status_tone = "warn" %}
@@ -308,6 +311,11 @@
         <div class="notice info" role="status">
             <svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
             <span><strong>Your order isn't placed yet.</strong>Check the details below, then choose how you'd like to pay. The plant is notified as soon as you confirm.</span>
+        </div>
+    {% elif failed %}
+        <div class="notice bad" role="status">
+            <svg class="i" viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
+            <span><strong>The tanker couldn't deliver this order{% if info.failure_reason %} ({{ info.failure_reason|lower }}){% endif %}.</strong>{% if info.refund_status == "Refunded" %}₹{{ info.refund_amount }} has been refunded to your original payment method.{% elif info.refund_status == "Refund pending" %}You get a full refund of ₹{{ info.refund_amount }} to your original payment method, usually within 5–7 working days.{% else %}Nothing was charged for this order.{% endif %} You can reorder from My orders.</span>
         </div>
     {% elif closed %}
         <div class="notice bad" role="status">
@@ -435,7 +443,14 @@
     <aside class="side">
 
         <section class="card">
-            {% if closed %}
+            {% if failed and info.refund_status in ["Refund pending", "Refunded"] %}
+                <h3>Refund</h3>
+                <p>Undelivered orders are refunded in full, whatever the cause.</p>
+                <div class="settled {{ 'ok' if info.refund_status == 'Refunded' else 'warn' }}">
+                    <span class="ico"><svg class="i" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg></span>
+                    <span><strong>{{ info.refund_status }} · ₹{{ info.refund_amount }}</strong><small>{{ "Returned to your original payment method" if info.refund_status == "Refunded" else "To your original payment method" }}</small></span>
+                </div>
+            {% elif closed %}
                 <h3>Nothing to pay</h3>
                 <p>This order was {{ status_l }}, so no amount is due.</p>
             {% elif needs_payment %}
@@ -486,8 +501,9 @@
                 <p>{{ status }}</p>
                 <ol class="timeline">
                     {% for step, when in info.timeline %}
-                        <li class="{{ 'done' if when else '' }}">
-                            <span class="dot">{% if when %}<svg class="i" viewBox="0 0 24 24"><path d="m5 12 5 5 9-10"/></svg>{% endif %}</span>
+                        {% set fail_step = failed and loop.last %}
+                        <li class="{{ 'done' if when else '' }}{{ ' fail' if fail_step else '' }}">
+                            <span class="dot">{% if fail_step %}<svg class="i" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>{% elif when %}<svg class="i" viewBox="0 0 24 24"><path d="m5 12 5 5 9-10"/></svg>{% endif %}</span>
                             <span><strong>{{ step }}</strong><small>{{ when or "Waiting" }}</small></span>
                         </li>
                     {% endfor %}

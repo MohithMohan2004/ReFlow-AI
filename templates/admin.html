@@ -122,6 +122,9 @@
         .pill.bad { background: var(--bad-bg); color: var(--bad); border-color: var(--bad-line); }
         .pill.info { background: var(--brand-tint); color: var(--brand); border-color: var(--info-line); }
         .pill.muted { background: var(--surface-2); color: var(--muted); border-color: var(--line); }
+        .policy { margin: 0; padding-left: 18px; display: grid; gap: 8px; font-size: 13.5px; line-height: 1.55; color: var(--ink); }
+        .policy .pill { vertical-align: 1px; }
+        .actions form { display: contents; }
         .tag { display: inline-block; padding: 2px 8px; border-radius: 6px; font-size: 11.5px; font-weight: 700; background: var(--violet-tint); color: var(--violet); }
 
         .grid-2 { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr); gap: 20px; align-items: start; }
@@ -269,7 +272,7 @@
 <body>
 
 {# ---------- Aggregates ---------- #}
-{% set agg = namespace(total=0, available=0, pending_orders=0, active_orders=0, done_orders=0, closed_orders=0, qty=0, stp_pending=0) %}
+{% set agg = namespace(total=0, available=0, pending_orders=0, active_orders=0, done_orders=0, closed_orders=0, qty=0, stp_pending=0, failed=0, refunds_due=0) %}
 {% for stp in stps %}
     {% set agg.total = agg.total + (stp.total_capacity_mld|float) %}
     {% set agg.available = agg.available + (stp.available_capacity_mld|float) %}
@@ -279,8 +282,10 @@
     {% set agg.qty = agg.qty + (order.quantity_kld|float) %}
     {% if s in ["pending", "offered", "new offer", "awaiting"] %}{% set agg.pending_orders = agg.pending_orders + 1 %}
     {% elif s in ["delivered", "completed"] %}{% set agg.done_orders = agg.done_orders + 1 %}
-    {% elif s in ["rejected", "cancelled", "canceled", "expired", "failed"] %}{% set agg.closed_orders = agg.closed_orders + 1 %}
+    {% elif s in ["rejected", "cancelled", "canceled", "expired", "failed", "delivery failed"] %}{% set agg.closed_orders = agg.closed_orders + 1 %}
     {% else %}{% set agg.active_orders = agg.active_orders + 1 %}{% endif %}
+    {% if s == "delivery failed" %}{% set agg.failed = agg.failed + 1 %}{% endif %}
+    {% if order.refund_status == "Refund pending" %}{% set agg.refunds_due = agg.refunds_due + 1 %}{% endif %}
 {% endfor %}
 {% for r in stp_registrations %}{% if (r.verification_status or "pending")|lower == "pending" %}{% set agg.stp_pending = agg.stp_pending + 1 %}{% endif %}{% endfor %}
 {% set used = agg.total - agg.available %}
@@ -290,7 +295,7 @@
 {% macro status_pill(value) -%}
     {%- set v = (value or "pending")|lower -%}
     {%- if v in ["approved", "delivered", "completed"] -%}<span class="pill ok">{{ value|capitalize }}</span>
-    {%- elif v in ["rejected", "cancelled", "expired", "failed"] -%}<span class="pill bad">{{ value|capitalize }}</span>
+    {%- elif v in ["rejected", "cancelled", "expired", "failed", "delivery failed"] -%}<span class="pill bad">{{ value|capitalize }}</span>
     {%- elif v in ["pending", "offered", "awaiting"] -%}<span class="pill warn">{{ (value or "Pending")|capitalize }}</span>
     {%- else -%}<span class="pill info">{{ value }}</span>{%- endif -%}
 {%- endmacro %}
@@ -300,27 +305,42 @@
 <div class="app">
 
     <aside class="side" id="side" aria-label="Admin navigation">
-        <a class="brand" href="#overview" data-tab="overview">
+        <a class="brand" href="#{{ perms[0] }}" data-tab="{{ perms[0] }}">
             <img src="{{ url_for('static', filename='brand-mark.svg') }}" alt="">
             <span><span class="wordmark">Re<span>Flow</span></span><small>Admin console</small></span>
         </a>
 
+        {% if "overview" in perms or "plants" in perms or "orders" in perms %}
         <div class="nav-label">Network</div>
         <nav class="nav">
+            {% if "overview" in perms %}
             <a href="#overview" data-tab="overview">
                 <svg class="i" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>
                 Overview
             </a>
+            {% endif %}
+            {% if "plants" in perms %}
             <a href="#plants" data-tab="plants">
                 <svg class="i" viewBox="0 0 24 24"><path d="M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18Z"/><path d="M10 6h4"/><path d="M10 10h4"/><path d="M10 14h4"/><path d="M10 18h4"/></svg>
                 Treatment plants
             </a>
+            {% endif %}
+            {% if "orders" in perms %}
             <a href="#orders" data-tab="orders">
                 <svg class="i" viewBox="0 0 24 24"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M9 12h6"/><path d="M9 16h6"/></svg>
                 Orders
                 {% if agg.pending_orders %}<span class="count num">{{ agg.pending_orders }}</span>{% endif %}
             </a>
+            {% endif %}
+            {% if "incidents" in perms %}
+            <a href="#incidents" data-tab="incidents">
+                <svg class="i" viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
+                Incidents &amp; refunds
+                {% if agg.refunds_due %}<span class="count num">{{ agg.refunds_due }}</span>{% endif %}
+            </a>
+            {% endif %}
         </nav>
+        {% endif %}
 
         <div class="nav-label">Review</div>
         <nav class="nav">
@@ -334,7 +354,7 @@
         <div class="side-foot">
             <div class="me">
                 <span class="av" id="meInitials">AD</span>
-                <span><strong id="meName">Administrator</strong><small>Admin</small></span>
+                <span><strong id="meName">Administrator</strong><small>{{ admin_role_label }}</small></span>
             </div>
             <nav class="nav">
                 <a href="/profile"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>My profile</a>
@@ -362,17 +382,20 @@
                     <span class="label-text">To review</span>
                     {% if to_review %}<span class="dot num">{{ to_review }}</span>{% endif %}
                 </a>
+                {% if "plants" in perms %}
                 <a class="btn primary" href="#plants" data-tab="plants" data-focus="newStpId">
                     <svg class="i" viewBox="0 0 24 24"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
                     <span class="label-text">Add plant</span>
                 </a>
+                {% endif %}
             </div>
         </header>
 
         <div class="content">
 
             {# ================= OVERVIEW ================= #}
-            <section class="panel" id="panel-overview" data-title="Overview">
+            {% if "overview" in perms %}
+            <section class="panel" id="panel-overview" data-title="Overview" hidden>
 
                 <div class="kpis">
                     <div class="card kpi">
@@ -511,7 +534,10 @@
                 </div>
             </section>
 
+            {% endif %}
+
             {# ================= PLANTS ================= #}
+            {% if "plants" in perms %}
             <section class="panel" id="panel-plants" data-title="Treatment plants" hidden>
 
                 <section class="card">
@@ -569,7 +595,10 @@
                 </section>
             </section>
 
+            {% endif %}
+
             {# ================= APPROVALS ================= #}
+            {% if "approvals" in perms %}
             <section class="panel" id="panel-approvals" data-title="Approvals" hidden>
 
                 <section class="card flush" id="stp-regs">
@@ -653,7 +682,10 @@
                 </section>
             </section>
 
+            {% endif %}
+
             {# ================= ORDERS ================= #}
+            {% if "orders" in perms %}
             <section class="panel" id="panel-orders" data-title="Orders" hidden>
                 <section class="card flush">
                     <div class="card-head" style="padding-bottom:14px;">
@@ -676,7 +708,7 @@
                                     {% set s = (order.status or "")|lower %}
                                     {% if s in ["pending", "offered", "new offer", "awaiting"] %}{% set b = "pending" %}
                                     {% elif s in ["delivered", "completed"] %}{% set b = "completed" %}
-                                    {% elif s in ["rejected", "cancelled", "canceled", "expired", "failed"] %}{% set b = "closed" %}
+                                    {% elif s in ["rejected", "cancelled", "canceled", "expired", "failed", "delivery failed"] %}{% set b = "closed" %}
                                     {% else %}{% set b = "active" %}{% endif %}
                                     <tr data-status="{{ b }}">
                                         <td><span class="id">{{ order.order_id }}</span><span class="sub">{{ (order.created_at or "")[:16] }}</span></td>
@@ -696,6 +728,77 @@
                     </div>
                 </section>
             </section>
+            {% endif %}
+
+            {# ================= INCIDENTS & REFUNDS ================= #}
+            {% if "incidents" in perms %}
+            <section class="panel" id="panel-incidents" data-title="Incidents & refunds" hidden>
+                <section class="card">
+                    <div class="card-head"><div><h2>Refund policy</h2><p>Applied automatically when a tanker reports it can't deliver</p></div></div>
+                    <ul class="policy">
+                        <li><b>Paid online:</b> the buyer gets a full refund of the invoice total to the original payment method, whatever caused the failure. It shows as <span class="pill warn">Refund pending</span> until you mark it refunded here.</li>
+                        <li><b>Cash on delivery:</b> nothing was collected, so the order closes as <span class="pill info">Not charged</span>.</li>
+                        <li>The order closes as <span class="pill bad">Delivery failed</span> for the buyer, the plant and the tanker, and the buyer can reorder in one tap.</li>
+                        <li><b>Plant-to-plant transfers</b> carry no payment. The water the source plant reserved goes back to its free capacity, so the plants can arrange the transfer again.</li>
+                    </ul>
+                </section>
+
+                <section class="card flush">
+                    <div class="card-head" style="padding-bottom:14px;">
+                        <div><h2>Failed deliveries</h2><p class="num">{{ agg.failed + failed_transfers|length }} reported{% if failed_transfers %} ({{ failed_transfers|length }} plant transfer{{ "" if failed_transfers|length == 1 else "s" }}){% endif %}{% if agg.refunds_due %} · {{ agg.refunds_due }} refund{{ "" if agg.refunds_due == 1 else "s" }} to pay{% endif %}</p></div>
+                        <div class="seg" role="group" aria-label="Filter failed deliveries" data-filter="incidentsTable">
+                            <button type="button" data-value="due" aria-pressed="{{ 'true' if agg.refunds_due else 'false' }}">Refund due <b>{{ agg.refunds_due }}</b></button>
+                            <button type="button" data-value="all" aria-pressed="{{ 'false' if agg.refunds_due else 'true' }}">All <b>{{ agg.failed + failed_transfers|length }}</b></button>
+                        </div>
+                    </div>
+                    <div class="table-wrap">
+                        <table id="incidentsTable">
+                            <thead><tr><th>Order</th><th>Buyer / plant</th><th>Tanker</th><th>What happened</th><th>Refund</th><th class="r">Actions</th></tr></thead>
+                            <tbody>
+                                {% for order in orders|reverse if (order.status or "")|lower == "delivery failed" %}
+                                    {% set due = order.refund_status == "Refund pending" %}
+                                    <tr data-status="{{ 'due' if due else 'settled' }}">
+                                        <td><span class="id">{{ order.order_id }}</span><span class="sub">{{ (order.failed_at or "")[:16]|replace("T", " ") }}</span></td>
+                                        <td>{{ order.buyer_name or "—" }}<span class="sub num">{{ order.buyer_phone }}</span></td>
+                                        <td>{{ order.assigned_operator_name or "—" }}<span class="sub">{{ order.stp_name }}</span></td>
+                                        <td>{{ incident_reasons.get(order.failure_reason, order.failure_reason or "—") }}{% if order.failure_note %}<span class="sub" title="{{ order.failure_note }}">“{{ order.failure_note|truncate(60, True, "…") }}”</span>{% endif %}</td>
+                                        <td>
+                                            {% if due %}<span class="pill warn">Refund pending</span>
+                                            {% elif order.refund_status == "Refunded" %}<span class="pill ok">Refunded</span>
+                                            {% else %}<span class="pill info">{{ order.refund_status or "Not charged" }}</span>{% endif %}
+                                            {% if order.refund_amount and order.refund_amount != "0.00" %}<span class="sub num">₹{{ order.refund_amount }}</span>{% endif %}
+                                        </td>
+                                        <td><div class="actions">
+                                            {% if due %}
+                                                <form method="POST" action="/admin/order/{{ order.order_id }}/refund" data-confirm="Mark ₹{{ order.refund_amount }} as refunded to {{ order.buyer_name or 'the buyer' }}?">
+                                                    <button type="submit" class="btn sm approve"><svg class="i" viewBox="0 0 24 24"><path d="m5 12 5 5 9-10"/></svg>Mark refunded</button>
+                                                </form>
+                                            {% else %}
+                                                <span style="font-size:12.5px;color:var(--faint);">{{ "Settled " ~ (order.refund_resolved_at or "")[:10] if order.refund_status == "Refunded" else "No action" }}</span>
+                                            {% endif %}
+                                        </div></td>
+                                    </tr>
+                                {% endfor %}
+                                {% for t in failed_transfers %}
+                                    <tr data-status="settled">
+                                        <td><span class="id">{{ t.transfer_id }}</span><span class="sub">Plant transfer · {{ (t.failed_at or "")[:16]|replace("T", " ") }}</span></td>
+                                        <td>{{ t.destination_stp_name or t.destination_stp_id }}<span class="sub">from {{ t.source_stp_name or t.source_stp_id }}</span></td>
+                                        <td>{{ t.assigned_operator_name or "—" }}<span class="sub num">{{ t.quantity_kld }} KLD</span></td>
+                                        <td>{{ incident_reasons.get(t.failure_reason, t.failure_reason or "—") }}{% if t.failure_note %}<span class="sub" title="{{ t.failure_note }}">“{{ t.failure_note|truncate(60, True, "…") }}”</span>{% endif %}</td>
+                                        <td><span class="pill info">No charge</span><span class="sub">{{ "Capacity returned to source" if t.capacity_returned == "True" else "Capacity not returned" }}</span></td>
+                                        <td><div class="actions"><span style="font-size:12.5px;color:var(--faint);">No action</span></div></td>
+                                    </tr>
+                                {% endfor %}
+                                {% if not agg.failed and not failed_transfers %}
+                                    <tr class="empty-row"><td colspan="6">No failed deliveries. Tankers report accidents and breakdowns from their job screen.</td></tr>
+                                {% endif %}
+                            </tbody>
+                        </table>
+                        <div class="no-results">No refunds waiting. Switch to "All" to see every failed delivery.</div>
+                    </div>
+                </section>
+            </section>
+            {% endif %}
 
         </div>
     </div>
@@ -716,10 +819,11 @@
     document.getElementById("today").textContent = new Date().toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
 
     // ---------- Tabs (hash based, so redirects with #tab land back here) ----------
-    var TABS = ["overview", "plants", "approvals", "orders"];
+    // Only the sections this admin role may open are rendered.
+    var TABS = {{ perms|reject("equalto", "fleet")|list|tojson }};
     var map = null;
     function show(tab, scrollTo) {
-        if (TABS.indexOf(tab) < 0) tab = "overview";
+        if (TABS.indexOf(tab) < 0) tab = TABS[0];
         TABS.forEach(function (t) { document.getElementById("panel-" + t).hidden = t !== tab; });
         document.querySelectorAll(".nav a[data-tab]").forEach(function (a) {
             if (a.dataset.tab === tab) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
@@ -760,6 +864,10 @@
     document.addEventListener("click", function (e) {
         var a = e.target.closest("a[data-confirm]");
         if (a && !window.confirm(a.dataset.confirm)) e.preventDefault();
+    });
+    document.addEventListener("submit", function (e) {
+        var f = e.target.closest("form[data-confirm]");
+        if (f && !window.confirm(f.dataset.confirm)) e.preventDefault();
     });
 
     // ---------- Table filters & search ----------
@@ -804,6 +912,7 @@
 
     // ---------- Add plant: inline checks ----------
     var addForm = document.getElementById("addForm"), addHint = document.getElementById("addHint");
+    if (addForm) {
     var baseHint = addHint.textContent;
     addForm.addEventListener("submit", function (e) {
         var lat = parseFloat(addForm.lat.value), lon = parseFloat(addForm.lon.value), cap = parseFloat(addForm.capacity.value);
@@ -815,6 +924,7 @@
         if (msg) { e.preventDefault(); addHint.textContent = msg; addHint.style.color = "var(--bad)"; }
     });
     addForm.addEventListener("input", function () { addHint.textContent = baseHint; addHint.style.color = ""; });
+    }
 
     // ---------- Map ----------
     function initMap() {

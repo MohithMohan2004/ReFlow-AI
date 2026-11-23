@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { Marker, Polyline, Popup } from "react-leaflet";
 import type { LatLngTuple } from "leaflet";
 import {
-  ArrowLeftRight, Check, CircleStop, Clock, Inbox, MapPinned, Navigation, PackageCheck, Phone, Play, RefreshCw, Timer, Truck, X,
+  ArrowLeftRight, Check, CircleStop, Clock, Inbox, MapPinned, Navigation, PackageCheck, Phone, Play, RefreshCw, Timer, TriangleAlert, Truck, X,
 } from "lucide-react";
+import { Dialog } from "../components/Dialog";
 import { AppShell } from "../components/AppShell";
 import { roleNav } from "../components/nav";
 import { UserMenu } from "../components/UserMenu";
@@ -68,6 +69,7 @@ export default function Tanker() {
   const [filter, setFilter] = useState<OrderFilter>("all");
   const [selected, setSelected] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [reporting, setReporting] = useState<Order | null>(null);
   const [route, setRoute] = useState<{ toPickup: LatLngTuple[]; toDrop: LatLngTuple[]; km: number } | null>(null);
   const seenOffers = useRef<Set<string> | null>(null);
   const mapRef = useRef<HTMLElement>(null);
@@ -216,7 +218,7 @@ export default function Tanker() {
                 {nextStop(selJob) && (
                   <button className="btn btn-sm btn-secondary" onClick={() => void startJourney(selJob)}><Navigation /> Navigate</button>
                 )}
-                <JobActions job={selJob} busy={busy} act={act} />
+                <JobActions job={selJob} busy={busy} act={act} onReport={setReporting} />
               </div>
             </aside>
   );
@@ -305,6 +307,7 @@ export default function Tanker() {
             act={act}
             onNavigate={() => void startJourney(current)}
             onView={() => view(current.o.order_id)}
+            onReport={setReporting}
           />
         )}
 
@@ -341,7 +344,7 @@ export default function Tanker() {
                       {(j.stage === "pickup" || j.stage === "deliver") && nextStop(j) && (
                         <button className="btn btn-sm btn-secondary" onClick={() => void startJourney(j)}><Navigation /> Navigate</button>
                       )}
-                      <JobActions job={j} busy={busy} act={act} />
+                      <JobActions job={j} busy={busy} act={act} onReport={setReporting} />
                     </div>
                   </li>
                 ))}
@@ -358,13 +361,18 @@ export default function Tanker() {
         </MapSheet>
       </main>
       <ChatWidget role="tanker" />
+      {reporting && (
+        <ReportDialog o={reporting} onClose={() => setReporting(null)}
+          onDone={() => { setReporting(null); setSelected(null); ov.reload(); }} />
+      )}
     </AppShell>
   );
 }
 
-function CurrentJob({ job, route, tripOn, starting, busy, act, onNavigate, onView }: {
+function CurrentJob({ job, route, tripOn, starting, busy, act, onNavigate, onView, onReport }: {
   job: Job; route: { km: number } | null; tripOn: boolean; starting: boolean; busy: string | null;
   act: (o: Order, k: "accept" | "reject" | "pickup" | "deliver") => void; onNavigate: () => void; onView: () => void;
+  onReport: (o: Order) => void;
 }) {
   const o = job.o;
   const stop = nextStop(job);
@@ -396,15 +404,21 @@ function CurrentJob({ job, route, tripOn, starting, busy, act, onNavigate, onVie
           {starting ? <Spinner /> : <Navigation />}
           {tripOn ? "Navigate" : "Start trip"}
         </button>
-        <JobActions job={job} busy={busy} act={act} />
+        <JobActions job={job} busy={busy} act={act} onReport={onReport} />
       </div>
       {!tripOn && stop && <p className="current-hint">Opens Google Maps and shares your live location with the buyer.</p>}
     </section>
   );
 }
 
-function JobActions({ job, busy, act }: { job: Job; busy: string | null; act: (o: Order, k: "accept" | "reject" | "pickup" | "deliver") => void }) {
+function JobActions({ job, busy, act, onReport }: {
+  job: Job; busy: string | null; act: (o: Order, k: "accept" | "reject" | "pickup" | "deliver") => void; onReport: (o: Order) => void;
+}) {
   const o = job.o;
+  // Demand orders and plant transfers on the road can be reported as undeliverable.
+  const report = (job.stage === "pickup" || job.stage === "deliver") && (
+    <button className="btn btn-sm btn-ghost report-btn" disabled={!!busy} onClick={() => onReport(o)}><TriangleAlert /> Report problem</button>
+  );
   if (job.stage === "offer") {
     return (
       <>
@@ -414,10 +428,10 @@ function JobActions({ job, busy, act }: { job: Job; busy: string | null; act: (o
     );
   }
   if (job.stage === "pickup") {
-    return <button className="btn btn-sm btn-primary" disabled={!!busy} onClick={() => act(o, "pickup")}>{busy === `${o.order_id}:pickup` ? <Spinner /> : <Truck />} Mark picked up</button>;
+    return <>{report}<button className="btn btn-sm btn-primary" disabled={!!busy} onClick={() => act(o, "pickup")}>{busy === `${o.order_id}:pickup` ? <Spinner /> : <Truck />} Mark picked up</button></>;
   }
   if (job.stage === "deliver") {
-    return <button className="btn btn-sm btn-success" disabled={!!busy} onClick={() => act(o, "deliver")}>{busy === `${o.order_id}:deliver` ? <Spinner /> : <PackageCheck />} Confirm delivery</button>;
+    return <>{report}<button className="btn btn-sm btn-success" disabled={!!busy} onClick={() => act(o, "deliver")}>{busy === `${o.order_id}:deliver` ? <Spinner /> : <PackageCheck />} Confirm delivery</button></>;
   }
   return null;
 }
@@ -522,4 +536,73 @@ function useLiveTrip() {
 
   useEffect(() => stop, [stop]);
   return { on, starting, pos, message, start, stop };
+}
+
+/** Same keys as INCIDENT_REASONS in app.py. */
+const INCIDENT_REASONS: [string, string][] = [
+  ["accident", "Road accident"],
+  ["breakdown", "Vehicle breakdown"],
+  ["road_blocked", "Road blocked or closed"],
+  ["weather", "Flooding or severe weather"],
+  ["spill", "Water spilled or contaminated"],
+  ["other", "Other unforeseen event"],
+];
+
+function ReportDialog({ o, onClose, onDone }: { o: Order; onClose: () => void; onDone: () => void }) {
+  const toast = useToast();
+  const [reason, setReason] = useState("");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const needsNote = reason === "other";
+  const transfer = isTransfer(o);
+  const id = transfer ? o.transfer_id || o.order_id : o.order_id;
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    if (!reason || (needsNote && !note.trim())) return;
+    setBusy(true);
+    try {
+      await postForm(`/tanker/${transfer ? "transfer" : "order"}/${encodeURIComponent(id)}/report_incident`, { reason, note: note.trim() });
+      toast(`Reported. ${id} is closed as delivery failed and ${transfer ? "both plants" : "the buyer"} can see it.`, "success");
+      onDone();
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Couldn't send the report.", "danger");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog title="Can't deliver this order?" onClose={onClose}>
+      <form className="stack report-form" onSubmit={submit}>
+        <p className="muted">
+          If something unforeseen stops this delivery, report it here. {transfer ? "Transfer" : "Order"} <strong className="num">{id}</strong> closes
+          as <strong>Delivery failed</strong>.{" "}
+          {transfer
+            ? "Both plants see it, and the water reserved at the source plant goes back to its free capacity."
+            : "The buyer sees it on their tracking page and gets a full refund if they paid online."}
+          {" "}If you're in an accident, make sure everyone is safe and call 112 first.
+        </p>
+        <fieldset className="report-reasons">
+          <legend>What happened?</legend>
+          {INCIDENT_REASONS.map(([value, label]) => (
+            <label key={value} className="report-reason" data-on={reason === value}>
+              <input type="radio" name="reason" value={value} checked={reason === value} onChange={() => setReason(value)} />
+              {label}
+            </label>
+          ))}
+        </fieldset>
+        <label className="field">
+          <span className="field-label">Details {needsNote ? "" : <span className="muted">(optional)</span>}</span>
+          <textarea className="input" rows={3} maxLength={500} value={note} onChange={(e) => setNote(e.target.value)}
+            placeholder="Where it happened, whether the water can still be delivered later…" required={needsNote} />
+        </label>
+        <div className="dialog-actions">
+          <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
+          <button type="submit" className="btn btn-danger" disabled={busy || !reason || (needsNote && !note.trim())}>
+            {busy ? <Spinner /> : <TriangleAlert />} Report delivery failed
+          </button>
+        </div>
+      </form>
+    </Dialog>
+  );
 }

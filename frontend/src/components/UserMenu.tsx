@@ -8,6 +8,7 @@ export const ROLE_META: Record<string, { label: string; home: string; tone: stri
   demand: { label: "Demand site", home: "/demand", tone: "sky" },
   stp: { label: "Plant operator", home: "/supply", tone: "teal" },
   tanker: { label: "Tanker partner", home: "/tanker", tone: "violet" },
+  superadmin: { label: "Super admin", home: "/admin", tone: "amber" },
   admin: { label: "Administrator", home: "/admin", tone: "amber" },
 };
 
