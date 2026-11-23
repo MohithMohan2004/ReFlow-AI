@@ -4046,9 +4046,33 @@ def api_login():
             session["buyer_phone"] = session["user_phone"]
 
         elif session["role"] == "tanker":
-            session["tanker_operator_name"] = (
-                session["user_name"]
+            # Same rule as the web login: the operator comes from the
+            # approved registration with this email, never from
+            # user_metadata, which the user can edit.
+            operator = get_tanker_operator_by_email(
+                str(user.email or "").strip().lower()
             )
+
+            if (
+                operator is None
+                or str(operator.get("verification_status") or "").strip().lower() != "approved"
+                or not str(operator.get("operator_id") or "").strip()
+            ):
+                session.clear()
+
+                return jsonify({
+                    "success": False,
+                    "message": (
+                        "No approved tanker operator registration "
+                        "is linked to this email address."
+                    )
+                }), 403
+
+            session["tanker_operator_id"] = str(operator.get("operator_id")).strip()
+            session["tanker_operator_name"] = str(
+                operator.get("operator_name") or session["user_name"] or ""
+            ).strip()
+            session["tanker_operator_email"] = str(user.email or "").strip().lower()
 
         elif session["role"] == "stp":
             stp_id = str(
@@ -7219,21 +7243,10 @@ def order_tanker_location(order_id):
     # -----------------------------------------
 
     current_user_id = session.get("user_id")
-    current_buyer_name = session.get("buyer_name") or session.get("user_name")
-    current_buyer_phone = session.get("buyer_phone") or session.get("user_phone")
     current_role = str(session.get("role") or "").strip().lower()
     current_stp_id = str(session.get("stp_id") or "").strip()
 
-    is_buyer_owner = (
-        current_user_id and
-        order.get("buyer_user_id", "") == current_user_id
-    ) or (
-        not order.get("buyer_user_id", "") and
-        current_buyer_name and
-        current_buyer_phone and
-        order.get("buyer_name") == current_buyer_name and
-        order.get("buyer_phone") == current_buyer_phone
-    )
+    is_buyer_owner = buyer_owns_order(order)
 
     is_stp_owner = (
         current_role == "stp"
@@ -7420,19 +7433,8 @@ def invoice():
 
     # Only allow the logged-in buyer to view their own invoice.
     current_user_id = session.get("user_id")
-    current_buyer_name = session.get("buyer_name") or session.get("user_name")
-    current_buyer_phone = session.get("buyer_phone") or session.get("user_phone")
 
-    authorized = (
-        current_user_id and
-        order.get("buyer_user_id", "") == current_user_id
-    ) or (
-        not order.get("buyer_user_id", "") and
-        current_buyer_name and
-        current_buyer_phone and
-        order.get("buyer_name") == current_buyer_name and
-        order.get("buyer_phone") == current_buyer_phone
-    )
+    authorized = buyer_owns_order(order)
 
     if not authorized:
         return "Unauthorized", 403
@@ -7702,6 +7704,22 @@ def build_invoice_context(order, distance_km=None):
 # PAYMENT / BOOKING CONFIRMATION
 # =========================================================
 
+def buyer_owns_order(row):
+    """True only when the order carries the logged-in buyer's user id.
+
+    Orders without buyer_user_id (made before user ids were stored) used to
+    match on buyer name + phone, but both are chosen by the user at signup or
+    on the profile page, so anyone could claim them."""
+    current_user_id = str(session.get("user_id") or "").strip()
+    return bool(current_user_id) and str(row.get("buyer_user_id") or "").strip() == current_user_id
+
+
+def legacy_order_awaiting_payment(row):
+    payment_status = str(row.get("payment_status") or "pending").strip().lower()
+    order_status = str(row.get("status") or "pending").strip().lower()
+    return payment_status == "pending" and order_status == "pending"
+
+
 @app.route("/pay_now", methods=["POST"])
 def pay_now():
     order_id = request.form.get("order_id", "").strip()
@@ -7754,22 +7772,16 @@ def pay_now():
         for row in reader:
             if row.get("order_id", "").strip() == order_id:
                 current_user_id = session.get("user_id")
-                current_buyer_name = session.get("buyer_name") or session.get("user_name")
-                current_buyer_phone = session.get("buyer_phone") or session.get("user_phone")
 
-                authorized = (
-                    current_user_id and
-                    row.get("buyer_user_id", "") == current_user_id
-                ) or (
-                    not row.get("buyer_user_id", "") and
-                    current_buyer_name and
-                    current_buyer_phone and
-                    row.get("buyer_name") == current_buyer_name and
-                    row.get("buyer_phone") == current_buyer_phone
-                )
+                authorized = buyer_owns_order(row)
 
                 if not authorized:
                     return "Unauthorized", 403
+
+                # Only a legacy order still waiting for its payment choice
+                # may be confirmed; never reset a placed/delivered/failed one.
+                if not legacy_order_awaiting_payment(row):
+                    return "This order has already been confirmed.", 400
 
                 row["status"] = "Pending"
                 row["payment_status"] = "Paid"
@@ -7842,22 +7854,16 @@ def confirm_cod():
         for row in reader:
             if row.get("order_id", "").strip() == order_id:
                 current_user_id = session.get("user_id")
-                current_buyer_name = session.get("buyer_name") or session.get("user_name")
-                current_buyer_phone = session.get("buyer_phone") or session.get("user_phone")
 
-                authorized = (
-                    current_user_id and
-                    row.get("buyer_user_id", "") == current_user_id
-                ) or (
-                    not row.get("buyer_user_id", "") and
-                    current_buyer_name and
-                    current_buyer_phone and
-                    row.get("buyer_name") == current_buyer_name and
-                    row.get("buyer_phone") == current_buyer_phone
-                )
+                authorized = buyer_owns_order(row)
 
                 if not authorized:
                     return "Unauthorized", 403
+
+                # Only a legacy order still waiting for its payment choice
+                # may be confirmed; never reset a placed/delivered/failed one.
+                if not legacy_order_awaiting_payment(row):
+                    return "This order has already been confirmed.", 400
 
                 row["status"] = "Pending"
                 row["payment_status"] = "Cash on Delivery"
@@ -7919,19 +7925,8 @@ def cancel_cod():
         for row in reader:
             if row.get("order_id", "").strip() == order_id:
                 current_user_id = session.get("user_id")
-                current_buyer_name = session.get("buyer_name") or session.get("user_name")
-                current_buyer_phone = session.get("buyer_phone") or session.get("user_phone")
 
-                authorized = (
-                    current_user_id and
-                    row.get("buyer_user_id", "") == current_user_id
-                ) or (
-                    not row.get("buyer_user_id", "") and
-                    current_buyer_name and
-                    current_buyer_phone and
-                    row.get("buyer_name") == current_buyer_name and
-                    row.get("buyer_phone") == current_buyer_phone
-                )
+                authorized = buyer_owns_order(row)
 
                 if not authorized:
                     return "Unauthorized", 403
@@ -8025,10 +8020,8 @@ def stp_orders():
 @app.route("/api/my_orders")
 def my_orders():
     user_id = session.get("user_id")
-    buyer_name = session.get("buyer_name") or session.get("user_name")
-    buyer_phone = session.get("buyer_phone") or session.get("user_phone")
 
-    if not user_id and not buyer_name and not buyer_phone:
+    if not user_id:
         return jsonify({"error": "Please log in to view your orders."}), 401
 
     results = []
@@ -8036,12 +8029,7 @@ def my_orders():
         with store.open(ORDERS_FILE, "r", newline="", encoding="utf-8") as f:
             reader = csv.DictReader(f)
             for row in reader:
-                matches_user = bool(user_id and row.get("buyer_user_id", "") == user_id)
-                matches_legacy = (
-                    not row.get("buyer_user_id", "") and buyer_name and buyer_phone and
-                    row.get("buyer_name") == buyer_name and row.get("buyer_phone") == buyer_phone
-                )
-                if matches_user or matches_legacy:
+                if buyer_owns_order(row):
                     results.append({
                         "order_id": row.get("order_id"),
                         "status": row.get("status"),
@@ -8065,11 +8053,26 @@ def my_orders():
 @app.route("/api/track_order")
 def track_order():
 
+    # Was public: anyone could read any order's status and delivery
+    # location by order ID or phone number.
+    if not session.get("user_id"):
+        return jsonify({"error": "Please log in to track orders."}), 401
+
     order_id = request.args.get("order_id")
     phone = request.args.get("phone")
     
     if not order_id and not phone:
         return jsonify({"error": "Provide order_id or phone"}), 400
+
+    role = str(session.get("role") or "").strip().lower()
+    own_stp_id = str(session.get("stp_id") or "").strip()
+
+    def visible(row):
+        if role in ADMIN_ROLES:
+            return True
+        if role == "stp":
+            return bool(own_stp_id) and str(row.get("stp_id") or "").strip() == own_stp_id
+        return buyer_owns_order(row)
 
     results = []
 
@@ -8081,7 +8084,7 @@ def track_order():
                 if (
                     (order_id and row.get("order_id") == order_id) or
                     (phone and row.get("buyer_phone") == phone)
-                ):
+                ) and visible(row):
                     results.append({
                         "order_id": row.get("order_id"),
                         "status": row.get("status"),
@@ -10981,10 +10984,18 @@ def stp_register():
 @app.route("/api/stp_order_tracking/<order_id>")
 def stp_order_tracking(order_id):
     # Return one order for the STP operator tracking page.
-    if session.get("role") != "stp":
+    if session.get("role") != "stp" or not session.get("user_id"):
         return jsonify({"error": "Unauthorized"}), 403
 
+    # The plant is the one in the session, never a query parameter: with
+    # ?stp_id left out, any plant used to read any order.
+    own_stp_id = _session_stp_id()
+    if not own_stp_id:
+        return jsonify({"error": "No STP is assigned to this account."}), 403
     requested_stp_id = (request.args.get("stp_id") or "").strip()
+    if requested_stp_id and requested_stp_id != own_stp_id:
+        return jsonify({"error": "Order does not belong to this STP"}), 403
+    requested_stp_id = own_stp_id
 
     if not store.exists(ORDERS_FILE):
         return jsonify({"error": "Orders file not found"}), 404
@@ -11347,13 +11358,9 @@ def reorder_order(order_id):
                     row.get("buyer_user_id", "") == user_id
                 )
 
-                matches_legacy = (
-                    not row.get("buyer_user_id", "")
-                    and buyer_name
-                    and buyer_phone
-                    and row.get("buyer_name") == buyer_name
-                    and row.get("buyer_phone") == buyer_phone
-                )
+                # Name + phone are user-chosen, so they never prove
+                # ownership.
+                matches_legacy = False
 
                 if not (
                     matches_user
