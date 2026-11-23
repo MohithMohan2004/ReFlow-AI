@@ -6,7 +6,7 @@ export function statusTone(status?: string | null): Tone {
   if (["delivered", "completed", "approved", "accepted", "active", "available", "verified"].includes(s)) return "success";
   if (["out for delivery", "in transit", "picked up", "assigned"].includes(s)) return "info";
   if (["pending", "awaiting", "offered"].includes(s)) return "warning";
-  if (["rejected", "cancelled", "canceled", "expired", "failed"].includes(s)) return "danger";
+  if (["rejected", "cancelled", "canceled", "expired", "failed", "delivery failed"].includes(s)) return "danger";
   return "neutral";
 }
 

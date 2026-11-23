@@ -150,11 +150,57 @@ def login_required(role=None):
                 session.clear()
                 return redirect(url_for("login"))
 
-            if role is not None and user_role != str(role).strip().lower():
+            wanted = str(role or "").strip().lower()
+            # role="admin" means any admin console role; what each one may
+            # do inside the console is checked by admin_required().
+            allowed = ADMIN_ROLES if wanted == "admin" else {wanted}
+            if role is not None and user_role not in allowed:
                 return redirect(url_for(ROLE_HOME_ENDPOINT[user_role]))
 
             return view_func(*args, **kwargs)
         return wrapped_view
+    return decorator
+
+
+# =========================================================
+# ADMIN ROLES
+# superadmin: the whole admin console.
+# admin: approvals only (plant and tanker registrations,
+#        vehicle document review).
+# Both roles are set in Supabase user_metadata.role; neither
+# can be chosen at public signup.
+# =========================================================
+ADMIN_ROLES = {"superadmin", "admin"}
+
+ADMIN_SECTIONS = {
+    "superadmin": ("overview", "plants", "orders", "incidents", "approvals", "fleet"),
+    "admin": ("approvals",),
+}
+
+ADMIN_ROLE_LABELS = {"superadmin": "Super admin", "admin": "Admin"}
+
+
+def admin_sections(role=None):
+    """Console sections the given (default: current) admin role may use."""
+    role = str(role if role is not None else session.get("role") or "").strip().lower()
+    return ADMIN_SECTIONS.get(role, ())
+
+
+def admin_required(section):
+    """Allow the view only to admins whose role includes `section`.
+
+    Page requests without permission go back to the admin console;
+    form posts get a short 403 text, like the other form endpoints.
+    """
+    def decorator(view_func):
+        @wraps(view_func)
+        def wrapped_view(*args, **kwargs):
+            if section not in admin_sections():
+                if request.method == "GET":
+                    return redirect(url_for("admin_dashboard"))
+                return "Your admin role does not allow this action.", 403
+            return view_func(*args, **kwargs)
+        return login_required(role="admin")(wrapped_view)
     return decorator
 
 
@@ -357,6 +403,7 @@ def store_end_request(_exc):
 REQUEST_TIMEOUT_MINUTES = 30
 TANKER_OFFER_TIMEOUT_MINUTES = 10
 ROLE_HOME_ENDPOINT = {
+    "superadmin": "admin_dashboard",
     "admin": "admin_dashboard",
     "demand": "demand",
     "stp": "supply",
@@ -1178,7 +1225,9 @@ def get_active_tanker_count(operator_id):
                     "completed",
                     "cancelled",
                     "canceled",
-                    "rejected"
+                    "rejected",
+                    "failed",
+                    "delivery failed"
                 }
 
 
@@ -1246,7 +1295,8 @@ def get_active_tanker_count(operator_id):
                     "completed",
                     "cancelled",
                     "canceled",
-                    "rejected"
+                    "rejected",
+                    "delivery failed"
                 }
 
 
@@ -1725,7 +1775,15 @@ STP_TRANSFER_FIELDS = [
     "assigned_operator_name",
     "operator_distance_km",
     "assigned_at",
-    "tankers_required"
+    "tankers_required",
+    # Expected arrival at the destination plant, set when a tanker takes it.
+    "eta_at",
+    # Failure reported by the tanker; the reserved water goes back to the
+    # source plant's free capacity (capacity_returned = True).
+    "failed_at",
+    "failure_reason",
+    "failure_note",
+    "capacity_returned"
 ]
 
 # =========================================================
@@ -1912,8 +1970,134 @@ ORDER_FIELDS = [
     # Price per KL frozen when the order is booked, so later rate-card
     # edits never change an invoice that was already issued.
     "invoice_water_rate",
-    "invoice_tariff"
+    "invoice_tariff",
+    # Expected arrival, set when the tanker picks the water up.
+    "eta_at",
+    # Delivery failure reported by the tanker (accident, breakdown...)
+    # and the refund that follows from it (see refund_terms_for()).
+    "failed_at",
+    "failure_reason",
+    "failure_note",
+    "refund_status",
+    "refund_amount",
+    "refund_resolved_at",
+    "refund_note"
 ]
+
+# =========================================================
+# FAILED DELIVERIES AND REFUNDS
+# =========================================================
+DELIVERY_FAILED_STATUS = "Delivery Failed"
+
+# What a tanker operator can report when a load can't be delivered.
+INCIDENT_REASONS = {
+    "accident": "Road accident",
+    "breakdown": "Vehicle breakdown",
+    "road_blocked": "Road blocked or closed",
+    "weather": "Flooding or severe weather",
+    "spill": "Water spilled or contaminated",
+    "other": "Other unforeseen event",
+}
+
+REFUND_PENDING = "Refund pending"
+REFUND_DONE = "Refunded"
+REFUND_NOT_CHARGED = "Not charged"
+
+# ETA once the tanker is out for delivery: road distance is about
+# 1.3x the straight line in Bengaluru, a loaded tanker averages
+# ~25 km/h in city traffic, plus a few minutes to park and connect.
+ETA_ROAD_FACTOR = 1.3
+ETA_AVG_SPEED_KMH = 25
+ETA_BUFFER_MINUTES = 10
+
+
+def refund_terms_for(order):
+    """ReFlow refund policy for an order the tanker could not deliver.
+
+    The buyer never pays for water that did not arrive, whatever caused
+    the failure:
+    - Paid online: 100% of the invoice total goes back to the original
+      payment method. It stays "Refund pending" until an admin marks
+      it refunded.
+    - Cash on delivery (or not paid yet): nothing was collected, so
+      nothing is charged.
+
+    Returns (refund_status, refund_amount_text).
+    """
+    paid = str(order.get("payment_status") or "").strip().lower() == "paid"
+    if paid:
+        return REFUND_PENDING, order_invoice_total(order) or ""
+    return REFUND_NOT_CHARGED, "0.00"
+
+
+def estimate_delivery_eta(order, start=None):
+    """Expected arrival for an order leaving the plant at `start`."""
+    start = start or datetime.now()
+    km = None
+    try:
+        # Stored coordinates only: this runs under orders_lock, so no
+        # geocoding round trip here.
+        delivery_lat = order.get("delivery_lat")
+        delivery_lon = order.get("delivery_lon")
+        stp = next(
+            (s for s in load_stps()
+             if str(s.get("stp_id")).strip() == str(order.get("stp_id") or "").strip()),
+            None,
+        )
+        if stp and delivery_lat and delivery_lon and float(delivery_lat) and float(delivery_lon):
+            km = haversine(
+                float(stp["latitude"]), float(stp["longitude"]),
+                float(delivery_lat), float(delivery_lon),
+            ) * ETA_ROAD_FACTOR
+    except (TypeError, ValueError, KeyError):
+        km = None
+    if km is None:
+        try:
+            km = float(order.get("distance_km") or 0) * ETA_ROAD_FACTOR
+        except (TypeError, ValueError):
+            km = 0.0
+    minutes = max(15, round(km / ETA_AVG_SPEED_KMH * 60 + ETA_BUFFER_MINUTES))
+    return start + timedelta(minutes=minutes)
+
+
+def estimate_transfer_eta(transfer, start=None):
+    """Expected arrival at the destination plant for a transfer leaving now."""
+    start = start or datetime.now()
+    stps = {str(s.get("stp_id")).strip(): s for s in load_stps()}
+    src = stps.get(str(transfer.get("source_stp_id") or "").strip())
+    dst = stps.get(str(transfer.get("destination_stp_id") or "").strip())
+    try:
+        km = haversine(
+            float(src["latitude"]), float(src["longitude"]),
+            float(dst["latitude"]), float(dst["longitude"]),
+        ) * ETA_ROAD_FACTOR
+    except (TypeError, ValueError, KeyError):
+        try:
+            km = float(transfer.get("distance_km") or 0) * ETA_ROAD_FACTOR
+        except (TypeError, ValueError):
+            km = 0.0
+    minutes = max(15, round(km / ETA_AVG_SPEED_KMH * 60 + ETA_BUFFER_MINUTES))
+    return start + timedelta(minutes=minutes)
+
+
+def order_progress_fields(row):
+    """Timestamps, ETA and failure/refund details shared by the order APIs."""
+    reason = str(row.get("failure_reason") or "").strip()
+    return {
+        "accepted_at": row.get("accepted_at", ""),
+        "assigned_at": row.get("assigned_at", ""),
+        "assigned_operator_name": row.get("assigned_operator_name", ""),
+        "pickup_at": row.get("pickup_at", ""),
+        "eta_at": row.get("eta_at", ""),
+        "delivered_at": row.get("delivered_at", ""),
+        "failed_at": row.get("failed_at", ""),
+        "failure_reason": INCIDENT_REASONS.get(reason, reason),
+        "failure_note": row.get("failure_note", ""),
+        "refund_status": row.get("refund_status", ""),
+        "refund_amount": row.get("refund_amount", ""),
+        "refund_resolved_at": row.get("refund_resolved_at", ""),
+    }
+
 
 def ensure_orders_schema():
     """Add buyer_user_id to older orders.csv files without deleting existing orders."""
@@ -1989,7 +2173,7 @@ def auto_reset_capacity():
 
     for row in orders:
         status = (row.get("status") or "").strip()
-        if status not in {"Accepted", "Out for Delivery", "Delivered"}:
+        if status not in {"Accepted", "Out for Delivery", "Delivered", DELIVERY_FAILED_STATUS}:
             continue
 
         release_at_raw = (row.get("capacity_release_at") or "").strip()
@@ -2384,6 +2568,7 @@ def login():
         # =====================================================
 
         allowed_roles = {
+            "superadmin",
             "admin",
             "demand",
             "stp",
@@ -2461,7 +2646,7 @@ def login():
         # ADMIN LOGIN
         # =====================================================
 
-        if role == "admin":
+        if role in ADMIN_ROLES:
 
             print(
                 "ADMIN LOGIN:",
@@ -5818,8 +6003,27 @@ def admin_dashboard():
     # ADMIN PAGE
     # =========================
 
+    # Failed plant-to-plant transfers, for the Incidents tab.
+    failed_transfers = []
+    if "incidents" in admin_sections():
+        ensure_stp_transfers_file()
+        with store.open(STP_TRANSFERS_FILE, "r", newline="", encoding="utf-8") as f:
+            failed_transfers = [
+                t for t in csv.DictReader(f)
+                if str(t.get("status") or "").strip() == DELIVERY_FAILED_STATUS
+            ]
+        failed_transfers.sort(key=lambda t: str(t.get("failed_at") or ""), reverse=True)
+
     return render_template(
         "admin.html",
+
+        failed_transfers=failed_transfers,
+
+        perms=list(admin_sections()),
+        admin_role_label=ADMIN_ROLE_LABELS.get(
+            str(session.get("role") or "").strip().lower(), "Admin"
+        ),
+        incident_reasons=INCIDENT_REASONS,
 
         stps=stps,
 
@@ -5850,7 +6054,7 @@ def admin_dashboard():
     )
 
 @app.route("/admin/tanker/<operator_id>/status/<status>")
-@login_required(role="admin")
+@admin_required("approvals")
 def update_tanker_status(operator_id, status):
 
     # Only allow valid statuses
@@ -5919,7 +6123,7 @@ def update_tanker_status(operator_id, status):
 # ADD STP
 # =========================
 @app.route("/admin/add_stp", methods=["POST"])
-@login_required(role="admin")
+@admin_required("plants")
 def add_stp():
     stps = load_stps()
 
@@ -5949,7 +6153,7 @@ def add_stp():
 # DELETE STP
 # =========================
 @app.route("/admin/delete_stp/<stp_id>")
-@login_required(role="admin")
+@admin_required("plants")
 def delete_stp(stp_id):
     stps = load_stps()
 
@@ -7408,8 +7612,13 @@ def build_invoice_context(order, distance_km=None):
             ("Order placed", _invoice_when(order.get("created_at"))),
             ("Accepted by plant", _invoice_when(order.get("accepted_at"))),
             ("Picked up", _invoice_when(order.get("pickup_at"))),
-            ("Delivered", _invoice_when(order.get("delivered_at")))
+            (
+                ("Delivery failed", _invoice_when(order.get("failed_at")))
+                if order.get("status") == DELIVERY_FAILED_STATUS
+                else ("Delivered", _invoice_when(order.get("delivered_at")))
+            )
         ],
+        **order_progress_fields(order),
         "created_label": _invoice_when(order.get("created_at"))
     }
 
@@ -7727,7 +7936,7 @@ def stp_orders():
                     "delivery_lon": row.get("delivery_lon", ""),
                     "total": order_invoice_total(row),
                     "tanker_operator_id": row.get("assigned_operator_id") or row.get("tanker_operator_id", ""),
-                    "assigned_operator_name": row.get("assigned_operator_name", ""),
+                    **order_progress_fields(row),
                 })
 
     results.sort(key=lambda x: x.get("created_at") or "", reverse=True)
@@ -7771,6 +7980,7 @@ def my_orders():
                         "water_type": row.get("water_type", ""),
                         "total": order_invoice_total(row),
                         "tanker_operator_id": row.get("tanker_operator_id", ""),
+                        **order_progress_fields(row),
                     })
 
     results.sort(key=lambda x: x.get("created_at") or "", reverse=True)
@@ -8019,7 +8229,8 @@ def build_supply_context(selected_id):
                         "Pending",
                         "Accepted",
                         "Out for Delivery",
-                        "Delivered"
+                        "Delivered",
+                        DELIVERY_FAILED_STATUS
                     }
                     if direction == "outgoing":
                         visible_statuses.add("Rejected")
@@ -8060,8 +8271,11 @@ def _stp_write_denied(target_stp_id):
     if not session.get("user_id"):
         return jsonify({"success": False, "message": "Please log in first."}), 401
     role = str(session.get("role") or "").strip().lower()
-    if role == "admin":
-        return None
+    if role in ADMIN_ROLES:
+        # Changing any plant's data is plant management: super admins only.
+        if "plants" in admin_sections(role):
+            return None
+        return jsonify({"success": False, "message": "Your admin role does not allow this."}), 403
     if role != "stp":
         return jsonify({"success": False, "message": "Unauthorized"}), 403
     own_stp_id = str(session.get("stp_id") or session.get("selected_stp_id") or "").strip()
@@ -8493,11 +8707,16 @@ def tanker_mark_order_picked_up(order_id):
 
             row["status"] = "Out for Delivery"
 
-            row["pickup_at"] = (
-                datetime.now().isoformat(
-                    timespec="seconds"
-                )
+            picked_up = datetime.now()
+
+            row["pickup_at"] = picked_up.isoformat(
+                timespec="seconds"
             )
+
+            # Shown to the buyer as the expected arrival time.
+            row["eta_at"] = estimate_delivery_eta(
+                row, picked_up
+            ).isoformat(timespec="seconds")
 
             break
 
@@ -8623,6 +8842,179 @@ def tanker_mark_order_delivered(order_id):
     return redirect(
         url_for("tanker_dashboard")
     )
+
+
+def _rewrite_orders(rows):
+    with store.open(ORDERS_FILE, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=ORDER_FIELDS)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({field: row.get(field, "") for field in ORDER_FIELDS})
+
+
+@app.route("/tanker/order/<order_id>/report_incident", methods=["POST"])
+@login_required(role="tanker")
+def tanker_report_incident(order_id):
+    """The assigned tanker reports that it can't deliver this order
+    (accident, breakdown, ...). The order closes as Delivery Failed and
+    the refund policy in refund_terms_for() applies."""
+
+    current_operator_id = str(session.get("tanker_operator_id") or "").strip()
+    if not current_operator_id:
+        return redirect(url_for("login"))
+
+    reason = str(request.form.get("reason") or "").strip().lower()
+    note = str(request.form.get("note") or "").strip()[:500]
+
+    if reason not in INCIDENT_REASONS:
+        return "Choose what happened.", 400
+    if reason == "other" and not note:
+        return "Describe what happened.", 400
+
+    ensure_orders_schema()
+
+    with orders_lock:
+        with store.open(ORDERS_FILE, "r", newline="", encoding="utf-8") as f:
+            rows = list(csv.DictReader(f))
+
+        order = next(
+            (r for r in rows if str(r.get("order_id") or "").strip() == str(order_id).strip()),
+            None,
+        )
+        if order is None:
+            return "Order not found.", 404
+
+        if str(order.get("assigned_operator_id") or "").strip() != current_operator_id:
+            return "This order is not assigned to you.", 403
+
+        status = str(order.get("status") or "").strip().lower()
+        if status not in {"accepted", "out for delivery"}:
+            return "Only an order you are delivering can be reported.", 400
+
+        refund_status, refund_amount = refund_terms_for(order)
+
+        order["status"] = DELIVERY_FAILED_STATUS
+        order["failed_at"] = datetime.now().isoformat(timespec="seconds")
+        order["failure_reason"] = reason
+        order["failure_note"] = note
+        order["eta_at"] = ""
+        order["refund_status"] = refund_status
+        order["refund_amount"] = refund_amount
+
+        _rewrite_orders(rows)
+
+    print("DELIVERY FAILED:", order_id, reason, "by", current_operator_id)
+
+    return redirect(url_for("tanker_dashboard"))
+
+
+@app.route("/tanker/transfer/<transfer_id>/report_incident", methods=["POST"])
+@login_required(role="tanker")
+def tanker_report_transfer_incident(transfer_id):
+    """The assigned tanker reports that a plant-to-plant transfer can't be
+    delivered. The transfer closes as Delivery Failed and the water the
+    source plant reserved for it goes back to its free capacity, so either
+    plant can arrange it again. Transfers carry no payment, so there is
+    nothing to refund."""
+
+    current_operator_id = str(session.get("tanker_operator_id") or "").strip()
+    if not current_operator_id:
+        return redirect(url_for("login"))
+
+    reason = str(request.form.get("reason") or "").strip().lower()
+    note = str(request.form.get("note") or "").strip()[:500]
+
+    if reason not in INCIDENT_REASONS:
+        return "Choose what happened.", 400
+    if reason == "other" and not note:
+        return "Describe what happened.", 400
+
+    ensure_stp_transfers_file()
+
+    with transfers_lock:
+        with store.open(STP_TRANSFERS_FILE, "r", newline="", encoding="utf-8") as f:
+            rows = list(csv.DictReader(f))
+
+        transfer = next(
+            (r for r in rows if str(r.get("transfer_id") or "").strip() == str(transfer_id).strip()),
+            None,
+        )
+        if transfer is None:
+            return "Transfer not found.", 404
+
+        if str(transfer.get("assigned_operator_id") or "").strip() != current_operator_id:
+            return "This transfer is not assigned to you.", 403
+
+        if str(transfer.get("status") or "").strip().lower() != "out for delivery":
+            return "Only a transfer you are delivering can be reported.", 400
+
+        # Give the reserved water back to the source plant.
+        quantity_mld = safe_float(transfer.get("quantity_kld"), 0) / 1000.0
+        source_id = str(transfer.get("source_stp_id") or "").strip()
+        stps = load_stps()
+        source = next((p for p in stps if str(p.get("stp_id") or "").strip() == source_id), None)
+        returned = False
+        if source is not None and quantity_mld > 0:
+            total = safe_float(source.get("total_capacity_mld"), 0)
+            source["available_capacity_mld"] = round(
+                min(total, safe_float(source.get("available_capacity_mld"), 0) + quantity_mld), 6
+            )
+            source["current_load_mld"] = round(
+                max(0.0, safe_float(source.get("current_load_mld"), 0) - quantity_mld), 6
+            )
+            returned = True
+
+        transfer["status"] = DELIVERY_FAILED_STATUS
+        transfer["tanker_status"] = DELIVERY_FAILED_STATUS
+        transfer["failed_at"] = datetime.now().isoformat(timespec="seconds")
+        transfer["failure_reason"] = reason
+        transfer["failure_note"] = note
+        transfer["eta_at"] = ""
+        transfer["capacity_returned"] = "True" if returned else "False"
+
+        if returned:
+            save_stps(stps)
+
+        with store.open(STP_TRANSFERS_FILE, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=STP_TRANSFER_FIELDS)
+            writer.writeheader()
+            for row in rows:
+                writer.writerow({field: row.get(field, "") for field in STP_TRANSFER_FIELDS})
+
+    print("TRANSFER DELIVERY FAILED:", transfer_id, reason, "by", current_operator_id)
+
+    return redirect(url_for("tanker_dashboard"))
+
+
+@app.route("/admin/order/<order_id>/refund", methods=["POST"])
+@admin_required("incidents")
+def admin_mark_refunded(order_id):
+    """Record that the refund for a failed delivery has been paid back."""
+
+    note = str(request.form.get("note") or "").strip()[:300]
+
+    ensure_orders_schema()
+
+    with orders_lock:
+        with store.open(ORDERS_FILE, "r", newline="", encoding="utf-8") as f:
+            rows = list(csv.DictReader(f))
+
+        order = next(
+            (r for r in rows if str(r.get("order_id") or "").strip() == str(order_id).strip()),
+            None,
+        )
+        if order is None:
+            return "Order not found.", 404
+        if order.get("refund_status") != REFUND_PENDING:
+            return "This order has no refund waiting.", 400
+
+        order["refund_status"] = REFUND_DONE
+        order["refund_resolved_at"] = datetime.now().isoformat(timespec="seconds")
+        order["refund_note"] = note
+
+        _rewrite_orders(rows)
+
+    return redirect(url_for("admin_dashboard") + "#incidents")
 
 
 @app.route("/tanker")
@@ -10531,7 +10923,7 @@ def stp_order_tracking(order_id):
     return jsonify({"error": "Order not found"}), 404
 
 @app.route("/admin/stp/<registration_id>/status/<status>")
-@login_required(role="admin")
+@admin_required("approvals")
 def update_stp_status(registration_id, status):
 
     # =========================
@@ -11829,6 +12221,7 @@ def chatbot():
                 "demand": "Site User / Buyer",
                 "stp": "STP / Seller",
                 "tanker": "Tanker Operator",
+                "superadmin": "Super administrator",
                 "admin": "Administrator",
             }
 
@@ -14545,7 +14938,7 @@ def api_tanker_remove_vehicle(vehicle_id):
     "/admin/tanker/operator/<operator_id>/vehicle/<vehicle_id>/remove",
     methods=["POST"]
 )
-@login_required(role="admin")
+@admin_required("fleet")
 def admin_remove_tanker_vehicle(operator_id, vehicle_id):
     """Let an admin remove a vehicle from any operator's fleet."""
 
@@ -14573,7 +14966,7 @@ def admin_remove_tanker_vehicle(operator_id, vehicle_id):
 @app.route(
     "/admin/tanker/operator/<operator_id>"
 )
-@login_required(role="admin")
+@admin_required("approvals")
 def admin_tanker_operator_details(operator_id):
 
     # ==========================================
@@ -14710,6 +15103,8 @@ def admin_tanker_operator_details(operator_id):
     return render_template(
         "admin_tanker_operator_details.html",
 
+        can_manage_fleet="fleet" in admin_sections(),
+
         operator=operator,
         vehicles=vehicles,
 
@@ -14736,7 +15131,7 @@ def admin_tanker_operator_details(operator_id):
 @app.route(
     "/admin/tanker/document/<document_id>/view"
 )
-@login_required(role="admin")
+@admin_required("approvals")
 def admin_view_tanker_document(document_id):
 
     ensure_tanker_vehicle_documents_file()
@@ -14821,7 +15216,7 @@ def admin_view_tanker_document(document_id):
     "/admin/tanker/document/<document_id>/review",
     methods=["POST"]
 )
-@login_required(role="admin")
+@admin_required("approvals")
 def admin_review_tanker_document(
     document_id
 ):
@@ -16130,6 +16525,11 @@ def _accept_transfer_pickup_locked():
                 row[
                     "status"
                 ] = "Out for Delivery"
+
+                # Shown to both plants as the expected arrival.
+                row["eta_at"] = estimate_transfer_eta(
+                    row
+                ).isoformat(timespec="seconds")
 
 
             updated_rows.append(row)

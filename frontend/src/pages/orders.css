@@ -45,6 +45,17 @@
 .order-steps .label { font-size: 12px; font-weight: 550; color: var(--ink-500); }
 .order-steps li[data-state="done"] .label,
 .order-steps li[data-state="current"] .label { color: var(--ink-900); }
+.order-steps .time { font-size: 11px; color: var(--ink-500); margin-top: -3px; }
+.order-steps .time.eta { color: var(--brand); font-weight: 600; }
+
+/* Out for delivery: expected arrival */
+.order-eta {
+  display: flex; gap: 12px; align-items: flex-start; padding: 12px 14px; border-radius: 12px;
+  background: var(--brand-tint); border: 1px solid color-mix(in srgb, var(--brand) 25%, transparent); color: var(--ink-900);
+}
+.order-eta > svg { color: var(--brand); flex: none; margin-top: 2px; }
+.order-eta > div { display: grid; gap: 2px; font-size: 13px; }
+.order-eta strong { font-size: 14px; font-weight: 600; }
 
 .order-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 

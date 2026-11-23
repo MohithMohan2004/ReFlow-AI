@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Marker, Polyline, Popup } from "react-leaflet";
 import type { LatLngTuple } from "leaflet";
 import {
-  ClipboardList, Droplets, FileText, MapPinned, Phone, RefreshCw, RotateCcw, Search, Truck, X, CircleCheck,
+  ClipboardList, Clock, Droplets, FileText, MapPinned, Phone, RefreshCw, RotateCcw, Search, Truck, X, CircleCheck,
 } from "lucide-react";
 import { AppShell } from "../components/AppShell";
 import { roleNav } from "../components/nav";
@@ -24,7 +24,10 @@ interface Order {
   order_id: string; status: string; location?: string; stp_id?: string; stp_name?: string;
   quantity_kld?: string; quality?: string; water_type?: string; created_at?: string; payment_status?: string;
   total?: string; buyer_name?: string; buyer_phone?: string; delivery_lat?: string; delivery_lon?: string;
-  tanker_operator_id?: string;
+  tanker_operator_id?: string; assigned_operator_name?: string;
+  accepted_at?: string; pickup_at?: string; eta_at?: string; delivered_at?: string;
+  failed_at?: string; failure_reason?: string; failure_note?: string;
+  refund_status?: string; refund_amount?: string; refund_resolved_at?: string;
 }
 interface Tracking {
   success: boolean; status?: string;
@@ -44,6 +47,7 @@ const norm = (s?: string) => String(s ?? "").trim().toLowerCase().replace(/_/g, 
 function stepOf(status?: string) {
   const s = norm(status);
   if (s === "rejected") return -1;
+  if (s === "delivery failed") return -3;
   if (["expired", "cancelled", "canceled", "failed"].includes(s)) return -2;
   if (s === "accepted") return 1;
   if (s === "out for delivery") return 2;
@@ -54,7 +58,74 @@ const rupees = (v?: string) => {
   const n = Number(v);
   return v && Number.isFinite(n) ? `₹${n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "—";
 };
-function payment(p?: string) {
+/** "14:05" for today, "19 Nov, 14:05" otherwise. */
+function stamp(v?: string) {
+  if (!v) return "";
+  const d = new Date(String(v).replace(" ", "T"));
+  if (Number.isNaN(d.getTime())) return "";
+  const t = d.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: false });
+  return d.toDateString() === new Date().toDateString() ? t : when(v);
+}
+function clock(d: Date) {
+  return d.toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit", hour12: true });
+}
+const parse = (v?: string) => {
+  const d = new Date(String(v ?? "").replace(" ", "T"));
+  return v && !Number.isNaN(d.getTime()) ? d : null;
+};
+
+/** Re-render every 30 s so "arrives in" counts down between polls. */
+function useNow(ms = 30000) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = window.setInterval(() => setNow(Date.now()), ms);
+    return () => window.clearInterval(t);
+  }, [ms]);
+  return now;
+}
+
+function EtaBanner({ o }: { o: Order }) {
+  const now = useNow();
+  const eta = parse(o.eta_at);
+  const left = eta ? Math.round((eta.getTime() - now) / 60000) : null;
+  return (
+    <div className="order-eta" role="status">
+      <Clock size={18} />
+      <div>
+        {eta ? (
+          left! > 0 ? <strong>Arriving around {clock(eta)} <span className="muted">· in about {left} min</span></strong>
+            : <strong>Expected by {clock(eta)} <span className="muted">· running a little late</span></strong>
+        ) : <strong>On the way</strong>}
+        <span className="muted">
+          Left the plant {stamp(o.pickup_at) || "recently"}{o.assigned_operator_name ? ` with ${o.assigned_operator_name}` : ""}. Open Track for the live position.
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function FailedNotice({ o, isPlant }: { o: Order; isPlant: boolean }) {
+  const refund = norm(o.refund_status);
+  const amount = rupees(o.refund_amount);
+  return (
+    <Notice tone="danger">
+      <strong>Delivery failed{o.failure_reason ? `: ${o.failure_reason}` : ""}</strong>
+      {" "}· reported by the tanker {stamp(o.failed_at)}.
+      {o.failure_note && <> “{o.failure_note}”</>}
+      <br />
+      {refund === "refunded" ? `${amount} has been refunded to the original payment method${o.refund_resolved_at ? ` (${stamp(o.refund_resolved_at)})` : ""}.`
+        : refund === "refund pending" ? (isPlant ? `The buyer gets a full refund of ${amount}.` : `You get a full refund of ${amount} to your original payment method, usually within 5–7 working days.`)
+        : "Nothing was charged for this order."}
+      {!isPlant && " Use Reorder to send water again."}
+    </Notice>
+  );
+}
+
+function payment(p?: string, refund?: string) {
+  const r = norm(refund);
+  if (r === "refunded") return <Badge tone="success">Refunded</Badge>;
+  if (r === "refund pending") return <Badge tone="warning">Refund pending</Badge>;
+  if (r === "not charged") return <Badge tone="neutral">Not charged</Badge>;
   const s = norm(p);
   if (s.includes("paid")) return <Badge tone="success">Paid</Badge>;
   if (s.includes("cash") || s.includes("cod")) return <Badge tone="info">Cash on delivery</Badge>;
@@ -187,23 +258,34 @@ function OrderRow({ o, isPlant, stpId, open, onToggle }: { o: Order; isPlant: bo
         <div><dt>Quantity</dt><dd className="num">{num(o.quantity_kld)} KLD{o.quality ? ` · ${o.quality}` : ""}</dd></div>
         <div className="wide"><dt>Deliver to</dt><dd title={o.location}>{o.location || "—"}</dd></div>
         <div><dt>Amount</dt><dd className="num">{rupees(o.total)}</dd></div>
-        <div><dt>Payment</dt><dd>{payment(o.payment_status)}</dd></div>
+        <div><dt>Payment</dt><dd>{payment(o.payment_status, o.refund_status)}</dd></div>
       </dl>
 
-      {step === -1 ? (
+      {step === -3 ? (
+        <FailedNotice o={o} isPlant={isPlant} />
+      ) : step === -1 ? (
         <Notice tone="danger">This order was rejected by the plant.</Notice>
       ) : step === -2 ? (
         <Notice tone="warning">This order {norm(o.status) === "expired" ? "expired before it was accepted and delivered" : `was ${norm(o.status)}`}. Use Reorder to place it again.</Notice>
       ) : (
         <ol className="order-steps" aria-label="Order progress">
-          {STEPS.map((label, i) => (
-            <li key={label} data-state={i < step || step === 3 ? "done" : i === step ? "current" : "todo"}>
-              <span className="dot">{i < step || step === 3 ? <CircleCheck size={14} /> : i + 1}</span>
-              <span className="label">{label}</span>
-            </li>
-          ))}
+          {STEPS.map((label, i) => {
+            const at = [o.created_at, o.accepted_at, o.pickup_at, o.delivered_at][i];
+            const reached = i <= step;
+            const eta = i === 3 && step === 2 ? parse(o.eta_at) : null;
+            return (
+              <li key={label} data-state={i < step || step === 3 ? "done" : i === step ? "current" : "todo"}>
+                <span className="dot">{i < step || step === 3 ? <CircleCheck size={14} /> : i + 1}</span>
+                <span className="label">{label}</span>
+                {reached && stamp(at) ? <span className="time num">{stamp(at)}</span>
+                  : eta ? <span className="time num eta">ETA {clock(eta)}</span> : null}
+              </li>
+            );
+          })}
         </ol>
       )}
+
+      {step === 2 && <EtaBanner o={o} />}
 
       <div className="order-actions">
         {step >= 0 && (
@@ -324,7 +406,11 @@ function TrackPanel({ o, stpId }: { o: Order; stpId: string }) {
           </div>
           <dl className="track-figs">
             <div><dt>{split ? "Distance left" : "Distance"}</dt><dd className="num">{split ? `${num(split.left, 1)} km` : route ? `${num(route.km, 1)} km` : loading ? "…" : "—"}</dd></div>
-            <div><dt>{split ? "Arrives in" : "Drive time"}</dt><dd className="num">{split ? `${split.mins} min` : route ? `${Math.max(1, Math.round(route.mins))} min` : "—"}</dd></div>
+            {onTheWay ? (
+              <div><dt>Expected arrival</dt><dd className="num">{split ? `${clock(new Date(Date.now() + split.mins * 60000))} · ${split.mins} min` : parse(o.eta_at) ? clock(parse(o.eta_at)!) : "—"}</dd></div>
+            ) : (
+              <div><dt>Drive time</dt><dd className="num">{route ? `${Math.max(1, Math.round(route.mins))} min` : "—"}</dd></div>
+            )}
             <div className="wide"><dt>Status</dt><dd><span className="track-live" data-on={!!truck} />{status}</dd></div>
           </dl>
         </>
