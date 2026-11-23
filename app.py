@@ -12936,23 +12936,9 @@ def chatbot():
                             row.get("buyer_phone") or ""
                         ).strip()
 
-                        matches_user = (
-                            bool(user_id)
-                            and bool(row_user_id)
-                            and row_user_id == user_id
-                        )
-
-                        # Backward compatibility for orders created before
-                        # buyer_user_id was added.
-                        matches_legacy = (
-                            not row_user_id
-                            and bool(buyer_name)
-                            and bool(buyer_phone)
-                            and row_name == buyer_name
-                            and row_phone == buyer_phone
-                        )
-
-                        if matches_user or matches_legacy:
+                        # Only orders carrying this user's id; name + phone
+                        # never prove ownership.
+                        if buyer_owns_order(row):
                             orders.append(row)
 
             if requested_order_id:
