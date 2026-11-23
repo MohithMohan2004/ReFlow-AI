@@ -198,9 +198,9 @@ To move existing local data into PostgreSQL, run `python scripts/migrate_to_post
 ## Deployment
 
 ReFlow runs on Azure Container Apps at https://reflow.lemonfield-c4c1d145.centralindia.azurecontainerapps.io.
-Every push to `main` builds the image in `deploy/Dockerfile` and deploys it through GitHub Actions
-(`.github/workflows/azure.yml`). Inside the container the app runs under Gunicorn. Setup, settings
-and day-to-day changes are described in `deploy/AZURE.md`.
+Every push to `main` builds the image in `deploy/Dockerfile` and uploads it through GitHub Actions
+(`.github/workflows/azure.yml`); RishabhWDB/purva-platform then deploys it. Inside the container the
+app runs under Gunicorn. How deploys and settings work is described in `deploy/AZURE.md`.
 
 To run the same image locally: `docker compose up --build` (reads `.env`).
 
