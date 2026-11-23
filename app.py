@@ -415,6 +415,33 @@ ROLE_HOME_ENDPOINT = {
     "tanker": "tanker_dashboard",
 }
 TANKER_LOCATIONS_TABLE = "tanker_locations"
+
+
+def save_tanker_location(payload):
+    """Upsert an operator's latest GPS fix. With DATABASE_URL (production) this
+    uses the server's own database connection, so public.tanker_locations
+    needs no policy for the public anon key."""
+    if store.enabled():
+        store.save_tanker_location(payload)
+        return
+    supabase.table(TANKER_LOCATIONS_TABLE).upsert(
+        payload,
+        on_conflict="tanker_operator_id"
+    ).execute()
+
+
+def get_tanker_location(tanker_operator_id):
+    """An operator's latest GPS fix as a dict, or None."""
+    if store.enabled():
+        return store.get_tanker_location(tanker_operator_id)
+    rows = (
+        supabase.table(TANKER_LOCATIONS_TABLE)
+        .select("*")
+        .eq("tanker_operator_id", tanker_operator_id)
+        .limit(1)
+        .execute()
+    ).data or []
+    return rows[0] if rows else None
 transfers_lock = threading.RLock()
 
 
@@ -7230,19 +7257,16 @@ def order_tanker_location(order_id):
         })
 
     try:
-        response = (
-            supabase.table(TANKER_LOCATIONS_TABLE)
-            .select(
-                "latitude, longitude, accuracy, speed, heading, "
-                "recorded_at, updated_at"
-            )
-            .eq("tanker_operator_id", tanker_operator_id)
-            .limit(1)
-            .execute()
-        )
-        rows = response.data or []
+        location = get_tanker_location(tanker_operator_id)
+        if location:
+            location = {
+                key: location.get(key)
+                for key in ("latitude", "longitude", "accuracy", "speed",
+                            "heading", "recorded_at", "updated_at")
+            }
+        rows = [location] if location else []
     except Exception as e:
-        print("Supabase order tanker location fetch error:", e)
+        print("Order tanker location fetch error:", e)
         return jsonify({
             "success": True,
             "order_status": order.get("status", ""),
@@ -15656,10 +15680,7 @@ def update_tanker_location():
     }
 
     try:
-        supabase.table(TANKER_LOCATIONS_TABLE).upsert(
-            payload,
-            on_conflict="tanker_operator_id"
-        ).execute()
+        save_tanker_location(payload)
     except Exception as e:
         print("Tanker location save failed:", e)
         return jsonify({"success": False, "error": "Unable to save location"}), 500
@@ -15679,21 +15700,14 @@ def latest_tanker_location():
         return jsonify({"success": True, "location": None})
 
     try:
-        response = (
-            supabase.table(TANKER_LOCATIONS_TABLE)
-            .select("*")
-            .eq("tanker_operator_id", tanker_operator_id)
-            .limit(1)
-            .execute()
-        )
-        rows = response.data or []
+        location = get_tanker_location(tanker_operator_id)
     except Exception as e:
-        print("Supabase tanker location fetch error:", e)
+        print("Tanker location fetch error:", e)
         return jsonify({"success": True, "location": None})
 
     return jsonify({
         "success": True,
-        "location": rows[0] if rows else None
+        "location": location
     })
 
 

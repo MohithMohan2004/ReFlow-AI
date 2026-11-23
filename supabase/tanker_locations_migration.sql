@@ -21,19 +21,13 @@ create index if not exists idx_tanker_locations_operator
     on public.tanker_locations (tanker_operator_id);
 
 -- Row Level Security.
--- IMPORTANT: this project's Flask backend connects to Supabase with the
--- PUBLISHABLE/ANON key (see .env / SUPABASE_KEY), not the service_role key,
--- and access control is already enforced in Flask via @login_required
--- (only a logged-in tanker operator can call /api/tanker/location).
--- So RLS is enabled here, but with policies that allow the anon role to
--- read/write -- the same trust model already used by the rest of this app.
+-- The Flask server reads and writes this table over its own database
+-- connection (DATABASE_URL, as the table owner), so the public anon key needs
+-- no access at all. RLS on with no policies = anon/authenticated see nothing.
+-- (The old "tanker_locations_anon_all" policy let anyone with the publishable
+-- key read and overwrite every truck's location; see)
 alter table public.tanker_locations enable row level security;
 
 drop policy if exists "tanker_locations_anon_all" on public.tanker_locations;
 
-create policy "tanker_locations_anon_all"
-    on public.tanker_locations
-    for all
-    to anon
-    using (true)
-    with check (true);
+revoke all on table public.tanker_locations from anon, authenticated;
