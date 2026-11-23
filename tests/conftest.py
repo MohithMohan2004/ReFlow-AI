@@ -81,13 +81,15 @@ class FakeAuth:
         self.users = {}  # email -> dict(id, password, user_metadata, email_confirmed)
         self.calls = []
 
-    def add_user(self, email, password, **metadata):
+    def add_user(self, email, password, app_metadata=None, **metadata):
         uid = f"user-{len(self.users) + 1}"
-        self.users[email] = {"id": uid, "password": password, "user_metadata": metadata}
+        self.users[email] = {"id": uid, "password": password, "user_metadata": metadata,
+                             "app_metadata": dict(app_metadata or {})}
         return uid
 
     def _user(self, record, email):
-        return types.SimpleNamespace(id=record["id"], email=email, user_metadata=dict(record["user_metadata"]))
+        return types.SimpleNamespace(id=record["id"], email=email, user_metadata=dict(record["user_metadata"]),
+                                     app_metadata=dict(record.get("app_metadata") or {}))
 
     def sign_in_with_password(self, creds):
         self.calls.append(("sign_in", creds.get("email")))

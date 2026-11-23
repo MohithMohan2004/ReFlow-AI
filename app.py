@@ -174,7 +174,7 @@ def login_required(role=None):
 # superadmin: the whole admin console.
 # admin: approvals only (plant and tanker registrations,
 #        vehicle document review).
-# Both roles are set in Supabase user_metadata.role; neither
+# Both roles are set in Supabase app_metadata.role; neither
 # can be chosen at public signup.
 # =========================================================
 ADMIN_ROLES = {"superadmin", "admin"}
@@ -185,6 +185,30 @@ ADMIN_SECTIONS = {
 }
 
 ADMIN_ROLE_LABELS = {"superadmin": "Super admin", "admin": "Admin"}
+
+
+PUBLIC_SIGNUP_ROLES = {"demand", "stp", "tanker"}
+
+
+def account_role(user):
+    """The role a signed-in Supabase user may act as.
+
+    app_metadata can only be written with the service role (server side),
+    so it is the source of truth, and the only one for admin roles.
+    user_metadata is chosen by the user and can be edited by them at any
+    time; it is accepted only for the three public signup roles, which grant
+    nothing by themselves (plants need an admin-approved plant account,
+    tankers an approved registration)."""
+    app_meta = getattr(user, "app_metadata", None) or {}
+    role = str(app_meta.get("role") or "").strip().lower()
+    if role in ROLE_HOME_ENDPOINT:
+        return role
+    claimed = str((getattr(user, "user_metadata", None) or {}).get("role") or "").strip().lower()
+    if claimed in PUBLIC_SIGNUP_ROLES:
+        return claimed
+    if claimed in ADMIN_ROLES:
+        security.audit("admin_role_claim_refused", account=getattr(user, "email", ""), claimed=claimed)
+    return ""
 
 
 def admin_sections(role=None):
@@ -2601,9 +2625,7 @@ def login():
             user.email or ""
         ).strip().lower()
 
-        role = str(
-            metadata.get("role") or ""
-        ).strip().lower()
+        role = account_role(user)
 
         # =====================================================
         # DEBUG
@@ -4184,9 +4206,7 @@ def api_login():
             user.email or ""
         )
 
-        session["role"] = str(
-            metadata.get("role", "")
-        ).strip().lower()
+        session["role"] = account_role(user)
 
         apply_profile_overrides_to_session()
 
