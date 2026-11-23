@@ -3,13 +3,13 @@ pandas
 numpy
 scikit-learn
 xgboost
-gunicorn
+gunicorn==26.2.0
 osmnx
 networkx
 requests
 cryptography
 openpyxl
-Werkzeug
+Werkzeug==3.1.9
 supabase
 SQLAlchemy>=2.0
 psycopg[binary]>=3.1
