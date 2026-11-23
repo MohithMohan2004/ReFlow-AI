@@ -1,3 +1,4 @@
+import { own } from "../lib/lookup";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { MessageCircle, Send, Sparkles, X } from "lucide-react";
 
@@ -80,7 +81,7 @@ export function ChatWidget({ role }: { role: string }) {
             )}
             {msgs.length === 1 && (
               <div className="chat-suggest">
-                {(SUGGESTIONS[role] ?? SUGGESTIONS.demand!).map((s) => (
+                {(own(SUGGESTIONS, role) ?? SUGGESTIONS.demand!).map((s) => (
                   <button key={s} type="button" onClick={() => void send(s)}>{s}</button>
                 ))}
               </div>

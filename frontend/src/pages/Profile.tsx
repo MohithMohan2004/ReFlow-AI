@@ -1,3 +1,4 @@
+import { own } from "../lib/lookup";
 import { useState, type FormEvent } from "react";
 import { Marker } from "react-leaflet";
 import {
@@ -30,7 +31,7 @@ interface MyOrder { order_id: string; status: string; stp_name: string; quantity
 export default function Profile() {
   const p = useAsync((s) => getJSON<ProfileData>("/api/profile", s));
   const role = p.data?.role ?? "";
-  const meta = ROLE_META[role];
+  const meta = own(ROLE_META, role);
   const nav = roleNav[role] ?? publicNav;
   const [editing, setEditing] = useState(false);
 

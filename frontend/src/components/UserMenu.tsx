@@ -1,3 +1,4 @@
+import { own } from "../lib/lookup";
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { ChevronDown, LayoutGrid, LogOut, Mail, UserRound } from "lucide-react";
@@ -15,7 +16,7 @@ export const ROLE_META: Record<string, { label: string; home: string; tone: stri
 export function Avatar({ initials, role, size = 30 }: { initials?: string; role?: string; size?: number }) {
   const ok = initials && /^[A-Z]{1,2}$/.test(initials);
   return (
-    <span className="avatar" data-tone={ROLE_META[role ?? ""]?.tone} style={{ width: size, height: size, flexBasis: size, fontSize: size * 0.38 }}>
+    <span className="avatar" data-tone={own(ROLE_META, role)?.tone} style={{ width: size, height: size, flexBasis: size, fontSize: size * 0.38 }}>
       {ok ? initials : <UserRound size={size * 0.5} />}
     </span>
   );
@@ -43,7 +44,7 @@ export function UserMenu() {
     return <a className="btn btn-sm btn-primary" href="/login">Sign in</a>;
   }
 
-  const meta = ROLE_META[user.role];
+  const meta = own(ROLE_META, user.role);
   return (
     <div ref={ref} style={{ position: "relative" }}>
       <button type="button" className="user-btn" onClick={() => setOpen((o) => !o)} aria-haspopup="menu" aria-expanded={open}>

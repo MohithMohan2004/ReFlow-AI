@@ -1,3 +1,4 @@
+import { own } from "../lib/lookup";
 import { useEffect, useMemo } from "react";
 import { useLocation } from "react-router-dom";
 import { Marker, Popup } from "react-leaflet";
@@ -45,7 +46,7 @@ export default function Landing() {
   const gradesPresent = GRADES.filter((g) => located.some((s) => (s.quality_grade || "General") === g.name));
   const bounds = located.length ? (located.map((s) => [s.latitude!, s.longitude!]) as [number, number][]) : null;
 
-  const dashboard = user?.logged_in ? HOME_FOR_ROLE[user.role] : undefined;
+  const dashboard = user?.logged_in ? own(HOME_FOR_ROLE, user.role) : undefined;
   const nav = user?.logged_in && roleNav[user.role] ? [...roleNav[user.role]!, publicNav[0]!] : publicNav;
 
   return (
