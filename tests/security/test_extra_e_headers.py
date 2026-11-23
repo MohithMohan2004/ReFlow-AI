@@ -35,3 +35,12 @@ def test_hsts_only_over_https(client):
 def test_errors_carry_headers_too(client):
     res = client.get("/no-such-page-xyz")
     assert res.headers.get("X-Content-Type-Options") == "nosniff"
+
+
+def test_cdn_files_have_subresource_integrity():
+    import re
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[2]
+    for t in root.glob("templates/*.html"):
+        for tag in re.findall(r"<(?:script|link)[^>]+(?:src|href)=\"https://(?:cdn\.jsdelivr\.net|cdnjs\.cloudflare\.com|unpkg\.com)[^>]*>", t.read_text()):
+            assert 'integrity="sha' in tag and 'crossorigin="anonymous"' in tag, (t.name, tag)
