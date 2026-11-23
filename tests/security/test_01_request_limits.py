@@ -27,3 +27,27 @@ def test_gunicorn_serves_http1_only_with_limits():
     for flag in ("--http-protocols h1", "--limit-request-line", "--limit-request-fields",
                  "--limit-request-field_size", "--timeout 75"):
         assert flag in cmd, flag
+
+
+def test_production_image_ships_every_module_and_flag():
+    """deploy/Dockerfile (what Azure runs) copies an explicit file list: every
+    local module app.py imports must be in it, and the gunicorn limits too."""
+    import ast
+    import re
+    root = Path(__file__).resolve().parents[2]
+    docker = (root / "deploy/Dockerfile").read_text()
+    copied = set()
+    for line in docker.splitlines():
+        if line.startswith("COPY") and "--from=" not in line:
+            copied.update(part.rstrip("/") for part in line.split()[1:-1] if not part.startswith("--"))
+    local_modules = {p.stem for p in root.glob("*.py")} | {p.name for p in root.iterdir() if p.is_dir() and (p / "__init__.py").exists()}
+    imported = set()
+    for node in ast.walk(ast.parse((root / "app.py").read_text())):
+        if isinstance(node, ast.Import):
+            imported.update(a.name.split(".")[0] for a in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported.add(node.module.split(".")[0])
+    for module in imported & local_modules:
+        assert f"{module}.py" in copied or module in copied, f"deploy/Dockerfile doesn't copy {module}"
+    for flag in ("--http-protocols h1", "--limit-request-line", "--limit-request-fields", "--limit-request-field_size"):
+        assert flag in docker, flag
