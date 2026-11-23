@@ -50,7 +50,13 @@ def gunicorn_port():
 def _raw(port, request):
     with socket.create_connection(("127.0.0.1", port), timeout=5) as s:
         s.sendall(request)
-        return s.recv(4096).decode("latin-1")
+        chunks = []
+        while True:
+            data = s.recv(4096)
+            if not data:
+                break
+            chunks.append(data)
+        return b"".join(chunks).decode("latin-1")
 
 
 def test_normal_request_works(gunicorn_port):

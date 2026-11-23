@@ -130,10 +130,31 @@ def reject_oversized_body():
     return None
 
 
+# ---------------------------------------------------------------------------
+# Item 10: never let a shared cache keep API data or a logged-in page
+# ---------------------------------------------------------------------------
+
+def set_cache_headers(response):
+    """/api/* and every page shown to a logged-in user: no-store. Hashed
+    assets under /static/app/assets/ keep their year-long cache (app.py)."""
+    if request.path.startswith("/static/"):
+        return response
+    from flask import session
+    private = request.path.startswith("/api/") or (
+        session.get("user_id") and response.mimetype == "text/html"
+    )
+    if private:
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Pragma"] = "no-cache"
+        response.vary.add("Cookie")
+    return response
+
+
 def init_app(app):
     app.config["MAX_CONTENT_LENGTH"] = MAX_CONTENT_LENGTH
     app.before_request(reject_oversized_body)
     app.before_request(check_rate_limit)
+    app.after_request(set_cache_headers)
 
 
 # ---------------------------------------------------------------------------
