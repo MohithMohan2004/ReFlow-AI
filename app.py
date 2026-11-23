@@ -2508,6 +2508,12 @@ def login():
             login_error="Please enter your email and password."
         )
 
+    if security.login_fields_invalid(login_identifier, password):
+        return render_template(
+            "login.html",
+            login_error="Invalid email or password."
+        )
+
     # Supabase signs in by email only; a username always fails as
     # "invalid credentials", which looks like a wrong password.
     if "@" not in login_identifier:
@@ -3052,6 +3058,18 @@ def signup():
     # IMPORTANT:
     # This applies to ALL roles.
     # =========================================================
+
+    field_error = security.signup_field_error(
+        email, password, username, first_name, last_name, mobile
+    )
+
+    if field_error:
+
+        return render_template(
+            "signup.html",
+            stps=stps,
+            signup_error=field_error
+        )
 
     if password != confirm_password:
 
@@ -3915,6 +3933,12 @@ def api_login():
             "message": "Please enter your email and password."
         }), 400
 
+    if security.login_fields_invalid(login_identifier, password):
+        return jsonify({
+            "success": False,
+            "message": "Invalid email or password."
+        }), 401
+
     try:
         # Use the same Supabase Auth login as the existing web login.
         response = supabase.auth.sign_in_with_password({
@@ -4194,6 +4218,16 @@ def api_signup():
                     "Please enter a registered operator ID."
                 )
             }), 400
+
+    field_error = security.signup_field_error(
+        email, password, username, first_name, last_name, mobile
+    )
+
+    if field_error:
+        return jsonify({
+            "success": False,
+            "message": field_error
+        }), 400
 
     if password != confirm_password:
         return jsonify({

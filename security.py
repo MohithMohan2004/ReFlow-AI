@@ -134,3 +134,39 @@ def init_app(app):
     app.config["MAX_CONTENT_LENGTH"] = MAX_CONTENT_LENGTH
     app.before_request(reject_oversized_body)
     app.before_request(check_rate_limit)
+
+
+# ---------------------------------------------------------------------------
+# Item 2: length limits on identity fields
+# ---------------------------------------------------------------------------
+
+MAX_EMAIL_LENGTH = 254          # RFC 5321 path limit
+MAX_PASSWORD_BYTES = 72         # bcrypt (Supabase Auth) ignores anything after 72 bytes
+MIN_PASSWORD_LENGTH = 8
+MAX_NAME_LENGTH = 100
+MAX_USERNAME_LENGTH = 32
+MAX_MOBILE_LENGTH = 15
+
+
+def password_too_long(password):
+    return len(str(password or "").encode("utf-8")) > MAX_PASSWORD_BYTES
+
+
+def signup_field_error(email, password, username="", first_name="", last_name="", mobile=""):
+    """Server-side limits for signup. Returns a message, or None if fine."""
+    if len(email) > MAX_EMAIL_LENGTH:
+        return "Email address is too long."
+    if password_too_long(password):
+        return "Password must be at most 72 bytes (about 72 letters or digits)."
+    if len(username) > MAX_USERNAME_LENGTH:
+        return f"Username must be at most {MAX_USERNAME_LENGTH} characters."
+    if len(first_name) > MAX_NAME_LENGTH or len(last_name) > MAX_NAME_LENGTH:
+        return f"Names must be at most {MAX_NAME_LENGTH} characters."
+    if len(mobile) > MAX_MOBILE_LENGTH:
+        return "Mobile number is too long."
+    return None
+
+
+def login_fields_invalid(email, password):
+    """True when sign-in input can't belong to any valid account."""
+    return len(email) > MAX_EMAIL_LENGTH or password_too_long(password)
