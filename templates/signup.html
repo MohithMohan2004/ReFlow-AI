@@ -119,9 +119,9 @@
                             <label for="username">Username</label>
                             <div class="input-wrap">
                                 <svg class="lead" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8"/></svg>
-                                <input id="username" type="text" name="username" placeholder="Choose a username" minlength="4" autocomplete="username" value="{{ form.get('username', '') }}" required>
+                                <input id="username" type="text" name="username" placeholder="Choose a username" minlength="4" maxlength="32" pattern="[A-Za-z0-9][A-Za-z0-9._\-]{3,31}" title="4-32 characters: letters, digits, dot, underscore or hyphen" autocomplete="username" value="{{ form.get('username', '') }}" required>
                             </div>
-                            <div class="hint" data-for="username">At least 4 characters. You can sign in with this or your email.</div>
+                            <div class="hint" data-for="username">4-32 characters: letters, digits, dot, underscore or hyphen.</div>
                         </div>
                         <div class="field">
                             <label for="password">Password</label>

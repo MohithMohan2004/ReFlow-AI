@@ -210,3 +210,31 @@ def looks_like_pdf(stream):
     head = stream.read(1024)
     stream.seek(position)
     return b"%PDF-" in head[:1024] and not head.lstrip().startswith((b"PK", b"<?xml", b"<"))
+
+
+# ---------------------------------------------------------------------------
+# Item 20: one normalisation for every identity string
+# ---------------------------------------------------------------------------
+
+import re as _re
+import unicodedata as _unicodedata
+
+USERNAME_RE = _re.compile(r"[a-z0-9][a-z0-9._-]{3,31}")
+EMAIL_ASCII_RE = _re.compile(r"[a-z0-9!#$%&'*+/=?^_`{|}~.-]+@[a-z0-9-]+(\.[a-z0-9-]+)+")
+
+
+def normalize_identity(value):
+    """NFKC + casefold + strip: "ᴮᴵᴳᴮᴵᴿᴰ" and "ＢＩＧＢＩＲＤ" both become
+    "bigbird". Use it wherever an email or username is stored, looked up or
+    compared, before any uniqueness check."""
+    return _unicodedata.normalize("NFKC", str(value or "")).casefold().strip()
+
+
+def identity_error(email, username=None):
+    """Reject look-alike characters: emails must be plain ASCII after
+    normalising (no Cyrillic "а" for Latin "a"), usernames a-z 0-9 . _ -"""
+    if email and not EMAIL_ASCII_RE.fullmatch(email):
+        return "Enter an email address using plain letters (a-z), digits and . _ + -"
+    if username is not None and not USERNAME_RE.fullmatch(username):
+        return "Usernames are 4-32 characters: letters, digits, dot, underscore or hyphen."
+    return None

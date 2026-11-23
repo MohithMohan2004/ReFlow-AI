@@ -2535,6 +2535,8 @@ def login():
             login_error="Please enter your email and password."
         )
 
+    login_identifier = security.normalize_identity(login_identifier)
+
     if security.login_fields_invalid(login_identifier, password):
         return render_template(
             "login.html",
@@ -3086,9 +3088,12 @@ def signup():
     # This applies to ALL roles.
     # =========================================================
 
+    email = security.normalize_identity(email)
+    username = security.normalize_identity(username)
+
     field_error = security.signup_field_error(
         email, password, username, first_name, last_name, mobile
-    )
+    ) or security.identity_error(email, username)
 
     if field_error:
 
@@ -3574,11 +3579,13 @@ def api_profile_update():
     body = request.get_json(silent=True) or {}
     first_name = str(body.get("first_name") or "").strip()[:60]
     last_name = str(body.get("last_name") or "").strip()[:60]
-    username = str(body.get("username") or "").strip()[:40]
+    username = security.normalize_identity(body.get("username"))[:40]
     mobile = re.sub(r"[\s-]", "", str(body.get("mobile") or ""))
 
     if not first_name:
         return jsonify({"success": False, "error": "First name is required."}), 400
+    if username and security.identity_error(None, username):
+        return jsonify({"success": False, "error": security.identity_error(None, username)}), 400
     if mobile and not re.fullmatch(r"\+?\d{10,13}", mobile):
         return jsonify({"success": False, "error": "Enter a valid mobile number."}), 400
 
@@ -3960,6 +3967,8 @@ def api_login():
             "message": "Please enter your email and password."
         }), 400
 
+    login_identifier = security.normalize_identity(login_identifier)
+
     if security.login_fields_invalid(login_identifier, password):
         return jsonify({
             "success": False,
@@ -4246,9 +4255,12 @@ def api_signup():
                 )
             }), 400
 
+    email = security.normalize_identity(email)
+    username = security.normalize_identity(username)
+
     field_error = security.signup_field_error(
         email, password, username, first_name, last_name, mobile
-    )
+    ) or security.identity_error(email, username)
 
     if field_error:
         return jsonify({
