@@ -9,6 +9,7 @@ networkx
 requests
 cryptography
 openpyxl
+defusedxml==0.7.1
 Werkzeug==3.1.9
 supabase
 SQLAlchemy>=2.0

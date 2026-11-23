@@ -10250,6 +10250,14 @@ def upload_tanker_vehicle_document(
             400
         )
 
+    # Check the content too, not just the name: a real PDF starts with
+    # "%PDF-" (an XLSX/ZIP, XML or HTML file renamed to .pdf does not).
+    if not security.looks_like_pdf(uploaded_file.stream):
+        return (
+            "Only PDF documents are allowed.",
+            400
+        )
+
 
     # ==========================================
     # MAXIMUM FILE SIZE: 5 MB

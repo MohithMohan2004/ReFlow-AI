@@ -197,3 +197,16 @@ def signup_field_error(email, password, username="", first_name="", last_name=""
 def login_fields_invalid(email, password):
     """True when sign-in input can't belong to any valid account."""
     return len(email) > MAX_EMAIL_LENGTH or password_too_long(password)
+
+
+# ---------------------------------------------------------------------------
+# Item 18 / Extra F: uploads are checked by content
+# ---------------------------------------------------------------------------
+
+def looks_like_pdf(stream):
+    """True if the file starts with the PDF signature (within the first 1 KB,
+    as the PDF spec allows). Leaves the stream at the start."""
+    position = stream.tell()
+    head = stream.read(1024)
+    stream.seek(position)
+    return b"%PDF-" in head[:1024] and not head.lstrip().startswith((b"PK", b"<?xml", b"<"))
