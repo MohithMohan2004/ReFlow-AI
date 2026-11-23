@@ -2741,8 +2741,20 @@ def login():
 
         elif role == "stp":
 
+            # The plant comes from an admin-approved plant account, not
+            # from user_metadata (which the user can edit).
+            plant_account = stp_account_for(user.id) or request_stp_account(
+                user.id, authenticated_email, session.get("user_name"),
+                session.get("user_phone"), metadata.get("stp_id")
+            )
+            block = stp_login_block_message(plant_account)
+
+            if block:
+                session.clear()
+                return render_template("login.html", login_error=block)
+
             stp_id = str(
-                metadata.get("stp_id") or ""
+                plant_account.get("stp_id") or ""
             ).strip()
 
             if not stp_id:
@@ -3438,6 +3450,22 @@ def signup():
         print("======================================")
         print("")
 
+        if role == "stp":
+            plant_account = request_stp_account(
+                response.user.id, email, f"{first_name} {last_name}".strip(), mobile, stp_id
+            )
+
+            return redirect(
+                url_for(
+                    "login",
+                    signup_success=(
+                        "Account created. The ReFlow team will check that you run "
+                        f"{plant_account.get('stp_name') or stp_id} and approve your access; "
+                        "you can sign in after that."
+                    )
+                )
+            )
+
         return redirect(
             url_for(
                 "login",
@@ -3745,6 +3773,117 @@ def api_stp_details_update():
 # =========================================================
 # OCEMS API CONNECTION (plant side, from the profile page)
 # =========================================================
+
+# =========================================================
+# PLANT ACCOUNTS (admin approval)
+# A plant signup only names a plant ID, and plant IDs are public, so a
+# signup alone must never grant control of a plant. Each plant user gets a
+# row here (pending -> approved / rejected by an admin in Approvals), and
+# plant login and every plant request require an approved row.
+# The plant comes from this row, never from Supabase user_metadata.
+# =========================================================
+
+STP_ACCOUNTS_FILE = os.path.join(DATABASE_DIR, "stp_accounts.csv")
+
+STP_ACCOUNT_FIELDS = [
+    "link_id", "user_id", "email", "name", "phone", "stp_id", "stp_name",
+    "status", "requested_at", "reviewed_at", "reviewed_by",
+]
+
+STP_ACCOUNT_PENDING = "pending"
+STP_ACCOUNT_APPROVED = "approved"
+STP_ACCOUNT_REJECTED = "rejected"
+
+stp_accounts_lock = threading.RLock()
+
+
+def load_stp_accounts():
+    with stp_accounts_lock:
+        if not store.exists(STP_ACCOUNTS_FILE) or store.getsize(STP_ACCOUNTS_FILE) == 0:
+            return []
+        with store.open(STP_ACCOUNTS_FILE, "r", newline="", encoding="utf-8") as f:
+            return list(csv.DictReader(f))
+
+
+def save_stp_accounts(rows):
+    with stp_accounts_lock:
+        with store.open(STP_ACCOUNTS_FILE, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=STP_ACCOUNT_FIELDS)
+            writer.writeheader()
+            for row in rows:
+                writer.writerow({k: row.get(k, "") for k in STP_ACCOUNT_FIELDS})
+
+
+def stp_account_for(user_id):
+    """The newest plant-account row for this Supabase user, or None."""
+    user_id = str(user_id or "").strip()
+    if not user_id:
+        return None
+    rows = [r for r in load_stp_accounts() if str(r.get("user_id") or "").strip() == user_id]
+    return rows[-1] if rows else None
+
+
+def approved_stp_id(user_id):
+    row = stp_account_for(user_id)
+    if row and row.get("status") == STP_ACCOUNT_APPROVED:
+        return str(row.get("stp_id") or "").strip() or None
+    return None
+
+
+def request_stp_account(user_id, email, name, phone, stp_id):
+    """File a pending request (once) and return the user's current row."""
+    with stp_accounts_lock:
+        existing = stp_account_for(user_id)
+        if existing is not None:
+            return existing
+        stp = get_stp_by_id(stp_id) or {}
+        row = {
+            "link_id": "PLA-" + secrets.token_hex(5).upper(),
+            "user_id": str(user_id),
+            "email": str(email or "").strip().lower(),
+            "name": str(name or "").strip(),
+            "phone": str(phone or "").strip(),
+            "stp_id": str(stp.get("stp_id") or stp_id or "").strip(),
+            "stp_name": str(stp.get("stp_name") or "").strip(),
+            "status": STP_ACCOUNT_PENDING,
+            "requested_at": datetime.now().isoformat(timespec="seconds"),
+        }
+        save_stp_accounts(load_stp_accounts() + [row])
+        security.audit("plant_access_requested", account=row["email"], stp=row["stp_id"])
+        return row
+
+
+def stp_login_block_message(row):
+    """None when the plant user may sign in, else the reason to show."""
+    status = (row or {}).get("status")
+    if status == STP_ACCOUNT_APPROVED:
+        return None
+    if status == STP_ACCOUNT_REJECTED:
+        return "Your request to manage this plant was not approved. Contact the ReFlow team."
+    plant = (row or {}).get("stp_name") or (row or {}).get("stp_id") or "this plant"
+    return (
+        f"Your access to {plant} is waiting for approval by the ReFlow team. "
+        "You can sign in once it's approved."
+    )
+
+
+@app.before_request
+def enforce_plant_approval():
+    """Sign out plant sessions without an approved plant-account row (covers
+    sessions that were open before approval existed, and revoked access)."""
+    if request.path.startswith("/static/") or request.endpoint in ("health", "login", "logout", "api_login", "api_logout"):
+        return None
+    if str(session.get("role") or "").strip().lower() != "stp" or not session.get("user_id"):
+        return None
+    approved = approved_stp_id(session.get("user_id"))
+    if approved and approved == str(session.get("stp_id") or "").strip():
+        return None
+    security.audit("plant_session_revoked", stp=session.get("stp_id") or "-")
+    session.clear()
+    if request.path.startswith("/api/"):
+        return jsonify({"success": False, "error": "Please sign in again."}), 401
+    return redirect(url_for("login"))
+
 
 def _session_stp_id():
     if str(session.get("role") or "").strip().lower() != "stp":
@@ -4095,9 +4234,22 @@ def api_login():
             session["tanker_operator_email"] = str(user.email or "").strip().lower()
 
         elif session["role"] == "stp":
-            stp_id = str(
-                session.get("stp_id") or ""
-            ).strip()
+            plant_account = stp_account_for(user.id) or request_stp_account(
+                user.id, user.email, session.get("user_name"),
+                session.get("user_phone"), metadata.get("stp_id")
+            )
+            block = stp_login_block_message(plant_account)
+
+            if block:
+                session.clear()
+
+                return jsonify({
+                    "success": False,
+                    "message": block
+                }), 403
+
+            stp_id = str(plant_account.get("stp_id") or "").strip()
+            session["stp_id"] = stp_id
 
             if not stp_id:
                 session.clear()
@@ -4364,9 +4516,18 @@ def api_signup():
                 )
             }), 400
 
+        pending_plant = None
+        if role == "stp":
+            pending_plant = request_stp_account(
+                response.user.id, email, f"{first_name} {last_name}".strip(), mobile, stp_id
+            )
+
         return jsonify({
             "success": True,
             "message": (
+                "Account created. An admin must approve your access to "
+                f"{pending_plant.get('stp_name') or stp_id} before you can sign in."
+                if pending_plant else
                 "Account created successfully. "
                 "Please log in."
             ),
@@ -6169,12 +6330,40 @@ def admin_dashboard():
         stp_registrations=
             stp_registrations,
 
+        stp_accounts=sorted(
+            load_stp_accounts(),
+            key=lambda r: r.get("requested_at") or "",
+            reverse=True
+        ),
+
         vehicles_by_operator=
             vehicles_by_operator,
 
         documents_by_vehicle=
             documents_by_vehicle
     )
+
+@app.route("/admin/stp_account/<link_id>/<status>", methods=["POST"])
+@admin_required("approvals")
+def update_stp_account_status(link_id, status):
+    if status not in (STP_ACCOUNT_APPROVED, STP_ACCOUNT_REJECTED):
+        return "Invalid status.", 400
+
+    with stp_accounts_lock:
+        rows = load_stp_accounts()
+        row = next((r for r in rows if r.get("link_id") == link_id), None)
+        if row is None:
+            return "Plant account request not found.", 404
+        if status == STP_ACCOUNT_APPROVED and not get_stp_by_id(row.get("stp_id")):
+            return "That plant is no longer in the network.", 400
+        row["status"] = status
+        row["reviewed_at"] = datetime.now().isoformat(timespec="seconds")
+        row["reviewed_by"] = str(session.get("user_email") or session.get("user_id") or "")
+        save_stp_accounts(rows)
+
+    security.audit("plant_access_" + status, link=link_id, stp=row.get("stp_id"))
+    return redirect(url_for("admin_dashboard") + "#approvals")
+
 
 @app.route("/admin/tanker/<operator_id>/status/<status>", methods=["POST"])
 @admin_required("approvals")

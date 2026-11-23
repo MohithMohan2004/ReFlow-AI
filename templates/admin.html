@@ -290,7 +290,8 @@
 {% for r in stp_registrations %}{% if (r.verification_status or "pending")|lower == "pending" %}{% set agg.stp_pending = agg.stp_pending + 1 %}{% endif %}{% endfor %}
 {% set used = agg.total - agg.available %}
 {% set avail_pct = (agg.available / agg.total * 100) if agg.total > 0 else 0 %}
-{% set to_review = agg.stp_pending + pending_tanker_operators %}
+{% set plant_accounts_pending = stp_accounts|selectattr("status", "equalto", "pending")|list|length %}
+{% set to_review = agg.stp_pending + pending_tanker_operators + plant_accounts_pending %}
 
 {% macro status_pill(value) -%}
     {%- set v = (value or "pending")|lower -%}
@@ -447,6 +448,11 @@
                             <div class="card-head"><div><h2>Needs your attention</h2><p>Items waiting for an admin decision</p></div></div>
                             {% if to_review %}
                                 <div class="todo">
+                                    <a href="#approvals" data-tab="approvals" data-scroll="plant-accounts" class="{{ 'clear' if not plant_accounts_pending }}">
+                                        <span class="ico sky"><svg class="i" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="m16 11 2 2 4-4"/></svg></span>
+                                        <span><strong>Plant accounts</strong><small>Confirm who runs each plant</small></span>
+                                        <span class="n num">{{ plant_accounts_pending }}</span>
+                                    </a>
                                     <a href="#approvals" data-tab="approvals" data-scroll="stp-regs" class="{{ 'clear' if not agg.stp_pending }}">
                                         <span class="ico teal"><svg class="i" viewBox="0 0 24 24"><path d="M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18Z"/><path d="M10 6h4"/><path d="M10 10h4"/></svg></span>
                                         <span><strong>Plant registrations</strong><small>Verify new treatment plants</small></span>
@@ -600,6 +606,45 @@
             {# ================= APPROVALS ================= #}
             {% if "approvals" in perms %}
             <section class="panel" id="panel-approvals" data-title="Approvals" hidden>
+
+                <section class="card flush" id="plant-accounts">
+                    <div class="card-head" style="padding-bottom:14px;">
+                        <div><h2>Plant accounts</h2><p>People asking to manage a plant. Approve only after confirming they run it.</p></div>
+                        <div class="seg" role="group" aria-label="Filter plant accounts" data-filter="plantAccountTable">
+                            <button type="button" data-value="pending" aria-pressed="{{ 'true' if plant_accounts_pending else 'false' }}">Pending <b>{{ plant_accounts_pending }}</b></button>
+                            <button type="button" data-value="all" aria-pressed="{{ 'false' if plant_accounts_pending else 'true' }}">All <b>{{ stp_accounts|length }}</b></button>
+                        </div>
+                    </div>
+                    <div class="table-wrap">
+                        <table id="plantAccountTable">
+                            <thead><tr><th>Person</th><th>Plant</th><th>Requested</th><th>Status</th><th class="r">Actions</th></tr></thead>
+                            <tbody>
+                                {% for a in stp_accounts %}
+                                    {% set st = (a.status or "pending")|lower %}
+                                    <tr data-status="{{ st }}">
+                                        <td><b>{{ a.name or "—" }}</b><span class="sub">{{ a.email }}{% if a.phone %} · <span class="num">{{ a.phone }}</span>{% endif %}</span></td>
+                                        <td>{{ a.stp_name or a.stp_id }}<span class="sub id">{{ a.stp_id }}</span></td>
+                                        <td class="num">{{ (a.requested_at or "")[:16]|replace("T", " ") }}</td>
+                                        <td>{{ status_pill(a.status or "Pending") }}</td>
+                                        <td><div class="actions">
+                                            {% if st == "pending" %}
+                                                <form method="post" action="/admin/stp_account/{{ a.link_id }}/approved#approvals" data-confirm="Let {{ a.name or a.email }} manage {{ a.stp_name or a.stp_id }}? They will be able to accept orders and change prices for this plant."><button type="submit" class="btn sm approve"><svg class="i" viewBox="0 0 24 24"><path d="m5 12 5 5 9-10"/></svg>Approve</button></form>
+                                                <form method="post" action="/admin/stp_account/{{ a.link_id }}/rejected#approvals" data-confirm="Reject {{ a.name or a.email }}'s request for {{ a.stp_name or a.stp_id }}?"><button type="submit" class="btn sm reject"><svg class="i" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>Reject</button></form>
+                                            {% elif st == "approved" %}
+                                                <form method="post" action="/admin/stp_account/{{ a.link_id }}/rejected#approvals" data-confirm="Remove {{ a.name or a.email }}'s access to {{ a.stp_name or a.stp_id }}? They will be signed out."><button type="submit" class="btn sm ghost-danger">Revoke</button></form>
+                                            {% else %}
+                                                <span style="font-size:12.5px;color:var(--faint);">Reviewed</span>
+                                            {% endif %}
+                                        </div></td>
+                                    </tr>
+                                {% else %}
+                                    <tr class="empty-row"><td colspan="5">No plant account requests yet.</td></tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                        <div class="no-results">Nothing waiting. Switch to "All" to see reviewed accounts.</div>
+                    </div>
+                </section>
 
                 <section class="card flush" id="stp-regs">
                     <div class="card-head" style="padding-bottom:14px;">

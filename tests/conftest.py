@@ -182,8 +182,19 @@ def login_as(client, **session_values):
     return client
 
 
+def approve_plant(app_module, user_id, stp_id, status="approved"):
+    """Give a test plant user the admin-approved plant account a real plant
+    user needs (see app.py PLANT ACCOUNTS)."""
+    rows = [r for r in app_module.load_stp_accounts() if r.get("user_id") != user_id]
+    rows.append({"link_id": f"PLA-{user_id}", "user_id": user_id, "email": f"{user_id}@example.com",
+                 "stp_id": stp_id, "status": status, "requested_at": "2026-11-23T09:00:00"})
+    app_module.save_stp_accounts(rows)
+
+
 @pytest.fixture()
 def as_user(app_module):
     def make(**session_values):
+        if session_values.get("role") == "stp" and session_values.get("user_id") and session_values.get("stp_id"):
+            approve_plant(app_module, session_values["user_id"], session_values["stp_id"])
         return login_as(app_module.app.test_client(), **session_values)
     return make
