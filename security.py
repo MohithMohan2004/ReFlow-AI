@@ -193,6 +193,45 @@ def check_same_origin():
     return make_response(message, 403)
 
 
+# ---------------------------------------------------------------------------
+# Extra E: security headers
+# Allow-list built from every external resource the pages use: Google Fonts,
+# Leaflet / leaflet.heat (jsDelivr), Chart.js (cdnjs), OpenStreetMap tiles,
+# Nominatim geocoding and OSRM routing called from the browser.
+# 'unsafe-inline' stays for scripts because the Jinja pages and the SPA's
+# theme bootstrap use inline <script> blocks and onclick handlers.
+# ---------------------------------------------------------------------------
+
+CONTENT_SECURITY_POLICY = "; ".join([
+    "default-src 'self'",
+    "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com",
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net",
+    "font-src 'self' data: https://fonts.gstatic.com",
+    "img-src 'self' data: blob: https://tile.openstreetmap.org https://*.tile.openstreetmap.org",
+    "connect-src 'self' https://nominatim.openstreetmap.org https://router.project-osrm.org",
+    "frame-src 'none'",
+    "frame-ancestors 'none'",
+    "object-src 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "manifest-src 'self'",
+    "worker-src 'self' blob:",
+])
+
+
+def set_security_headers(response):
+    headers = response.headers
+    headers.setdefault("Content-Security-Policy", CONTENT_SECURITY_POLICY)
+    headers.setdefault("X-Content-Type-Options", "nosniff")
+    headers.setdefault("X-Frame-Options", "DENY")
+    headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    headers.setdefault("Permissions-Policy", "geolocation=(self), camera=(), microphone=(), payment=(), usb=()")
+    headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
+    if request.is_secure:  # https, as reported by the Azure ingress (item 11)
+        headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+    return response
+
+
 def init_app(app):
     # Item 11: exactly one proxy (the Azure Container Apps ingress) sits in
     # front of gunicorn. Trust only the last X-Forwarded-For entry (the one the
@@ -205,6 +244,7 @@ def init_app(app):
     app.before_request(check_same_origin)
     app.before_request(check_rate_limit)
     app.after_request(set_cache_headers)
+    app.after_request(set_security_headers)
 
 
 # ---------------------------------------------------------------------------
