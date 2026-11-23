@@ -584,6 +584,13 @@ def _active_ocems_feeds():
 
 ocems_api.start_warmer(_active_ocems_feeds)
 
+if ocems_api.missing_production_key_secret():
+    print(
+        "SECURITY WARNING: OCEMS_KEY_SECRET is not set. Stored OCEMS keys are "
+        "read with FLASK_SECRET_KEY and new keys can't be saved until it is set "
+        "."
+    )
+
 # =========================================================
 # TANKER VEHICLES
 # Added from File 1 without changing the existing
@@ -3768,6 +3775,8 @@ def api_ocems_connection_submit():
     stp_id = _session_stp_id()
     if not stp_id or not get_stp_by_id(stp_id):
         return jsonify({"success": False, "error": "Only plant accounts can connect an OCEMS feed."}), 403
+    if ocems_api.missing_production_key_secret():
+        return jsonify({"success": False, "error": "OCEMS keys can't be saved right now. Ask the ReFlow team to finish the server setup."}), 503
 
     body = request.get_json(silent=True) or {}
     provider = str(body.get("provider") or "trata").strip().lower()

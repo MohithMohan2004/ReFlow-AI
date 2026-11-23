@@ -129,7 +129,21 @@ def _fernet():
     return MultiFernet(keys)
 
 
+def running_in_production():
+    """Azure Container Apps sets CONTAINER_APP_NAME on every replica;
+    REFLOW_ENV=production does the same anywhere else."""
+    return bool(os.getenv("CONTAINER_APP_NAME")) or os.getenv("REFLOW_ENV", "").strip().lower() == "production"
+
+
+def missing_production_key_secret():
+    return running_in_production() and not (os.getenv("OCEMS_KEY_SECRET") or "").strip()
+
+
 def encrypt_key(api_key):
+    # In production, never encrypt new keys with the session secret: fail
+    # closed until OCEMS_KEY_SECRET is set.
+    if missing_production_key_secret():
+        raise OcemsApiError("OCEMS keys can't be saved right now. Ask the ReFlow team to finish the server setup.")
     return _fernet().encrypt(api_key.encode()).decode()
 
 
