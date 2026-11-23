@@ -35,7 +35,7 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qsl, urlencode, urlparse
 
 import requests
-from cryptography.fernet import Fernet, InvalidToken
+from cryptography.fernet import Fernet, MultiFernet
 
 
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -103,27 +103,54 @@ def _with_deadline(fn, seconds):
 # Key encryption
 # ---------------------------------------------------------------------------
 
-def _fernet():
-    secret = (
-        os.getenv("OCEMS_KEY_SECRET")
-        or os.getenv("FLASK_SECRET_KEY")
-        or ""
-    ).strip()
-    if not secret:
-        raise RuntimeError("Set OCEMS_KEY_SECRET (or FLASK_SECRET_KEY) to store OCEMS API keys.")
+def _derive(secret):
     digest = hashlib.sha256(("reflow-ocems:" + secret).encode()).digest()
     return Fernet(base64.urlsafe_b64encode(digest))
+
+
+def _fernet():
+    """Fernet (AES-128-CBC + HMAC-SHA256, authenticated) keyed from
+    OCEMS_KEY_SECRET. New tokens use the first key; reading also accepts
+    OCEMS_KEY_SECRET_OLD (during a rotation) and FLASK_SECRET_KEY (keys saved
+    before OCEMS_KEY_SECRET was set)."""
+    secrets_in_order = [
+        os.getenv("OCEMS_KEY_SECRET"),
+        os.getenv("OCEMS_KEY_SECRET_OLD"),
+        os.getenv("FLASK_SECRET_KEY"),
+    ]
+    keys, seen = [], set()
+    for secret in secrets_in_order:
+        secret = (secret or "").strip()
+        if secret and secret not in seen:
+            seen.add(secret)
+            keys.append(_derive(secret))
+    if not keys:
+        raise RuntimeError("Set OCEMS_KEY_SECRET (or FLASK_SECRET_KEY) to store OCEMS API keys.")
+    return MultiFernet(keys)
 
 
 def encrypt_key(api_key):
     return _fernet().encrypt(api_key.encode()).decode()
 
 
+KEY_UNREADABLE = "The stored API key can't be read. Ask the plant to submit it again."
+
+
 def decrypt_key(token):
+    """One generic error for every failure (bad padding, bad MAC, wrong key,
+    garbage), so a failure tells an attacker nothing."""
     try:
         return _fernet().decrypt(str(token or "").encode()).decode()
-    except (InvalidToken, ValueError):
-        raise OcemsApiError("The stored API key can't be read. Ask the plant to submit it again.")
+    except Exception:
+        raise OcemsApiError(KEY_UNREADABLE) from None
+
+
+def rotate_key(token):
+    """Re-encrypt a stored token with the current OCEMS_KEY_SECRET."""
+    try:
+        return _fernet().rotate(str(token or "").encode()).decode()
+    except Exception:
+        raise OcemsApiError(KEY_UNREADABLE) from None
 
 
 def key_hint(api_key):
