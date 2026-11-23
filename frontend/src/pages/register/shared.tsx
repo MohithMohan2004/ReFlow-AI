@@ -116,5 +116,6 @@ export function SuccessView({ tone, title, idLabel, id, children, actions }: {
 }
 
 export const PHONE_RE = /^[6-9]\d{9}$/;
-export const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+// Linear: each domain label excludes dots, so there is nothing to backtrack over.
+export const EMAIL_RE = /^[^\s@]+@[^\s@.]+(?:\.[^\s@.]+)+$/;
 export const digits = (v: string) => v.replace(/\D/g, "");

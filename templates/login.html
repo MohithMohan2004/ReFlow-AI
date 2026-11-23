@@ -84,17 +84,9 @@
                 <div class="message error" role="alert">{{ login_error }}</div>
             {% endif %}
 
-            {% if request.args.get("signup_success") %}
-                <div class="message success" role="status">
-                    {{ request.args.get("signup_success") }}
-                </div>
-            {% endif %}
-
-            {% if request.args.get("account_deleted") %}
-                <div class="message success" role="status">
-                    {{ request.args.get("account_deleted") }}
-                </div>
-            {% endif %}
+            {% for category, message in get_flashed_messages(with_categories=true) %}
+                <div class="message {{ 'error' if category == 'error' else 'success' }}" role="status">{{ message }}</div>
+            {% endfor %}
 
             <form method="POST" action="{{ url_for('login') }}" id="loginForm">
 
@@ -132,7 +124,6 @@
                         <button
                             type="button"
                             class="toggle"
-                            onclick="togglePassword()"
                             aria-label="Show password"
                             aria-pressed="false"
                         >
@@ -180,7 +171,9 @@
 
 </main>
 
-<script>
+<script nonce="{{ csp_nonce() }}">
+document.querySelector(".password-wrap .toggle").addEventListener("click", togglePassword);
+
 function togglePassword() {
     const input = document.getElementById("password");
     const button = document.querySelector(".password-wrap .toggle");

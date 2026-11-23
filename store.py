@@ -469,6 +469,8 @@ CSV_FILES = {
     "database/tanker_vehicles.csv": "tanker_vehicles",
     "database/tanker_vehicle_documents.csv": "tanker_vehicle_documents",
     "database/ocems_api_connections.csv": "ocems_api_connections",
+    "database/stp_accounts.csv": "stp_accounts",
+    "database/admin_mfa.csv": "admin_mfa",
     "data/stp_pricing.csv": "stp_pricing",
     "database/stp_pricing.csv": "stp_pricing_fallback",
 }
@@ -477,6 +479,7 @@ JSON_FILES = {
     "data/stp_data.json": "stps",
     "data/stp_status.json": "stp_status",
     "data/profile_overrides.json": "profile_overrides",
+    "data/session_epochs.json": "session_epochs",
 }
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -487,3 +490,61 @@ if DATABASE_URL:
         register_csv(os.path.join(BASE_DIR, _file), _name)
     for _file, _name in JSON_FILES.items():
         register_json(os.path.join(BASE_DIR, _file), _name)
+
+
+# ---------------------------------------------------------------------------
+# Live tanker locations (public.tanker_locations)
+#
+# Read and written over the server's own database connection, so the table
+# no longer needs a policy that lets the public anon key read or write it
+#. SQLite (tests) has no schemas.
+# ---------------------------------------------------------------------------
+
+TANKER_LOCATION_COLUMNS = (
+    "tanker_operator_id", "latitude", "longitude", "accuracy",
+    "speed", "heading", "recorded_at", "updated_at",
+)
+
+
+def _tanker_locations_table():
+    return "public.tanker_locations" if engine.dialect.name == "postgresql" else "tanker_locations"
+
+
+def save_tanker_location(payload):
+    """Insert or replace one operator's latest fix."""
+    values = {key: payload.get(key) for key in TANKER_LOCATION_COLUMNS}
+    for key in ("latitude", "longitude", "accuracy", "speed", "heading"):
+        try:
+            values[key] = None if values[key] in (None, "") else float(values[key])
+        except (TypeError, ValueError):
+            values[key] = None
+    postgres = engine.dialect.name == "postgresql"
+    columns = ", ".join(TANKER_LOCATION_COLUMNS)
+    params = ", ".join(
+        f"CAST(:{key} AS timestamptz)" if postgres and key.endswith("_at") else f":{key}"
+        for key in TANKER_LOCATION_COLUMNS
+    )
+    updates = ", ".join(f"{key} = excluded.{key}" for key in TANKER_LOCATION_COLUMNS[1:])
+    sql = (
+        f"INSERT INTO {_tanker_locations_table()} ({columns}) VALUES ({params}) "
+        f"ON CONFLICT (tanker_operator_id) DO UPDATE SET {updates}"
+    )
+    with engine.begin() as conn:
+        conn.execute(text(sql), values)
+
+
+def get_tanker_location(operator_id):
+    """The operator's latest fix as a dict, or None."""
+    columns = ", ".join(TANKER_LOCATION_COLUMNS)
+    with engine.connect() as conn:
+        row = conn.execute(
+            text(f"SELECT {columns} FROM {_tanker_locations_table()} WHERE tanker_operator_id = :id LIMIT 1"),
+            {"id": operator_id},
+        ).mappings().first()
+    if row is None:
+        return None
+    result = dict(row)
+    for key in ("recorded_at", "updated_at"):
+        if hasattr(result.get(key), "isoformat"):
+            result[key] = result[key].isoformat()
+    return result

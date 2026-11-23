@@ -63,7 +63,7 @@ COPY --from=deps /opt/venv /opt/venv
 
 # Only what the server needs at runtime. data/ and database/ hold the seed
 # files the app reads (and, without DATABASE_URL, writes).
-COPY --chown=reflow:reflow app.py config.py store.py ocems_api.py ./
+COPY --chown=reflow:reflow app.py config.py store.py ocems_api.py security.py ./
 COPY --chown=reflow:reflow chatbot/ ./chatbot/
 COPY --chown=reflow:reflow ml/ ./ml/
 COPY --chown=reflow:reflow data/ ./data/
@@ -75,4 +75,6 @@ RUN mkdir -p uploads/tanker_documents && chown -R reflow:reflow uploads
 
 USER 10001
 EXPOSE 8080
-CMD ["sh", "-c", "exec gunicorn app:app --bind 0.0.0.0:${PORT:-8080} --workers ${WEB_CONCURRENCY:-1} --threads ${GUNICORN_THREADS:-8} --worker-class gthread --timeout 120 --access-logfile - --error-logfile -"]
+# HTTP/1.1 only (TLS and HTTP/2 end at the Azure ingress; CVE-2023-44487 is
+# handled there) and explicit request-header limits.
+CMD ["sh", "-c", "exec gunicorn app:app --bind 0.0.0.0:${PORT:-8080} --workers ${WEB_CONCURRENCY:-1} --threads ${GUNICORN_THREADS:-8} --worker-class gthread --http-protocols h1 --timeout 120 --limit-request-line 4094 --limit-request-fields 100 --limit-request-field_size 8190 --access-logfile - --error-logfile -"]

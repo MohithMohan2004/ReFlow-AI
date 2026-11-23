@@ -523,11 +523,9 @@
 
 
 
-    {% if request.args.get("fleet_error") %}
-        <div class="fleet-notice error" role="alert">{{ request.args.get("fleet_error") }}</div>
-    {% elif request.args.get("fleet_notice") %}
-        <div class="fleet-notice" role="status">{{ request.args.get("fleet_notice") }}</div>
-    {% endif %}
+    {% for category, message in get_flashed_messages(with_categories=true) %}
+        <div class="fleet-notice{{ ' error' if category == 'error' else '' }}" role="{{ 'alert' if category == 'error' else 'status' }}">{{ message }}</div>
+    {% endfor %}
 
     <!-- =========================
          DOCUMENT STATS
@@ -1069,7 +1067,6 @@
                             method="POST"
                             action="{{ url_for('admin_remove_tanker_vehicle', operator_id=operator.operator_id, vehicle_id=vehicle.vehicle_id) }}"
                             data-confirm="Remove {{ vehicle.registration_number }} from this fleet? Its documents are deleted too."
-                            onsubmit="return confirm(this.dataset.confirm);"
                         >
                             <button type="submit">Remove vehicle</button>
                         </form>
@@ -1103,6 +1100,12 @@
 
 </div>
 
+<script nonce="{{ csp_nonce() }}">
+document.addEventListener("submit", function (e) {
+    var f = e.target.closest("form[data-confirm]");
+    if (f && !window.confirm(f.dataset.confirm)) e.preventDefault();
+});
+</script>
 </body>
 
 </html>

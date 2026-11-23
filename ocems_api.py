@@ -35,7 +35,7 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qsl, urlencode, urlparse
 
 import requests
-from cryptography.fernet import Fernet, InvalidToken
+from cryptography.fernet import Fernet, MultiFernet
 
 
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -103,27 +103,68 @@ def _with_deadline(fn, seconds):
 # Key encryption
 # ---------------------------------------------------------------------------
 
-def _fernet():
-    secret = (
-        os.getenv("OCEMS_KEY_SECRET")
-        or os.getenv("FLASK_SECRET_KEY")
-        or ""
-    ).strip()
-    if not secret:
-        raise RuntimeError("Set OCEMS_KEY_SECRET (or FLASK_SECRET_KEY) to store OCEMS API keys.")
+def _derive(secret):
     digest = hashlib.sha256(("reflow-ocems:" + secret).encode()).digest()
     return Fernet(base64.urlsafe_b64encode(digest))
 
 
+def _fernet():
+    """Fernet (AES-128-CBC + HMAC-SHA256, authenticated) keyed from
+    OCEMS_KEY_SECRET. New tokens use the first key; reading also accepts
+    OCEMS_KEY_SECRET_OLD (during a rotation) and FLASK_SECRET_KEY (keys saved
+    before OCEMS_KEY_SECRET was set)."""
+    secrets_in_order = [
+        os.getenv("OCEMS_KEY_SECRET"),
+        os.getenv("OCEMS_KEY_SECRET_OLD"),
+        os.getenv("FLASK_SECRET_KEY"),
+    ]
+    keys, seen = [], set()
+    for secret in secrets_in_order:
+        secret = (secret or "").strip()
+        if secret and secret not in seen:
+            seen.add(secret)
+            keys.append(_derive(secret))
+    if not keys:
+        raise RuntimeError("Set OCEMS_KEY_SECRET (or FLASK_SECRET_KEY) to store OCEMS API keys.")
+    return MultiFernet(keys)
+
+
+def running_in_production():
+    """Azure Container Apps sets CONTAINER_APP_NAME on every replica;
+    REFLOW_ENV=production does the same anywhere else."""
+    return bool(os.getenv("CONTAINER_APP_NAME")) or os.getenv("REFLOW_ENV", "").strip().lower() == "production"
+
+
+def missing_production_key_secret():
+    return running_in_production() and not (os.getenv("OCEMS_KEY_SECRET") or "").strip()
+
+
 def encrypt_key(api_key):
+    # In production, never encrypt new keys with the session secret: fail
+    # closed until OCEMS_KEY_SECRET is set.
+    if missing_production_key_secret():
+        raise OcemsApiError("OCEMS keys can't be saved right now. Ask the ReFlow team to finish the server setup.")
     return _fernet().encrypt(api_key.encode()).decode()
 
 
+KEY_UNREADABLE = "The stored API key can't be read. Ask the plant to submit it again."
+
+
 def decrypt_key(token):
+    """One generic error for every failure (bad padding, bad MAC, wrong key,
+    garbage), so a failure tells an attacker nothing."""
     try:
         return _fernet().decrypt(str(token or "").encode()).decode()
-    except (InvalidToken, ValueError):
-        raise OcemsApiError("The stored API key can't be read. Ask the plant to submit it again.")
+    except Exception:
+        raise OcemsApiError(KEY_UNREADABLE) from None
+
+
+def rotate_key(token):
+    """Re-encrypt a stored token with the current OCEMS_KEY_SECRET."""
+    try:
+        return _fernet().rotate(str(token or "").encode()).decode()
+    except Exception:
+        raise OcemsApiError(KEY_UNREADABLE) from None
 
 
 def key_hint(api_key):
@@ -198,6 +239,23 @@ def normalise_data_link(raw, provider="trata"):
 # Vendor calls
 # ---------------------------------------------------------------------------
 
+def _require_public_host(host):
+    """Refuse a vendor host that resolves to a private, loopback, link-local
+    or otherwise internal address (SSRF). The
+    host name itself is already limited to the vendor's domain."""
+    import ipaddress
+    import socket
+    try:
+        infos = socket.getaddrinfo(host, 443, proto=socket.IPPROTO_TCP)
+    except (socket.gaierror, UnicodeError):
+        raise OcemsApiError("Could not reach the OCEMS platform. Check the platform URL.")
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0].split("%")[0])
+        if not ip.is_global or ip.is_multicast:
+            _log(f"{host} resolves to non-public address {ip}; refused")
+            raise OcemsApiError("The platform URL doesn't point to a public OCEMS server.")
+
+
 def _get_csv(base_url, api_key, path, params=None, provider="trata", timeout=REQUEST_TIMEOUT):
     """GET base_url + path. With a data link as api_key, the link's own
     query (which carries the key) is sent instead of the key header, and
@@ -213,6 +271,7 @@ def _get_csv(base_url, api_key, path, params=None, provider="trata", timeout=REQ
         headers[spec["key_header"]] = api_key
     started = time.monotonic()
     host = urlparse(url).hostname
+    _require_public_host(host)
     try:
         res = _with_deadline(
             lambda: requests.get(
@@ -649,20 +708,32 @@ def _parse_timestamp(value):
     return dt
 
 
+# Header cells come from the vendor. Cap them, and keep the unit pattern
+# linear: the inner class excludes every bracket, so each "(" or "[" is tried
+# once (the old "\s*([^)\]]*)\s*" took minutes on 2,000 characters).
+MAX_LABEL_LENGTH = 200
+UNIT_IN_BRACKETS = re.compile(r"[\(\[]([^\(\)\[\]]*)[\)\]]\s*$")
+
+
 def _split_label(label):
     """"BOD (mg/l)" -> ("BOD (mg/l)", "mg/l")."""
-    label = str(label or "").strip()
-    m = re.search(r"[\(\[]\s*([^\)\]]*)\s*[\)\]]\s*$", label)
+    label = str(label or "").strip()[:MAX_LABEL_LENGTH]
+    m = UNIT_IN_BRACKETS.search(label)
     unit = m.group(1).strip() if m else ""
     return label, unit
 
 
+# Characters a parameter name may keep. Names are vendor-controlled and end up
+# in pages, so markup characters (< > " ' & `) never survive.
+UNSAFE_LABEL_CHARS = re.compile(r"[^\w .,/%()\[\]+°µ³²-]")
+
+
 def _canonical(label):
-    base = re.sub(r"[\(\[].*$", "", label).strip()
+    base = re.sub(r"[\(\[].*$", "", str(label)[:MAX_LABEL_LENGTH]).strip()
     for pattern, name in CANONICAL:
         if pattern.search(base):
             return name
-    return base or label
+    return UNSAFE_LABEL_CHARS.sub("", base or str(label)[:MAX_LABEL_LENGTH]).strip() or "Parameter"
 
 
 def _number(value):

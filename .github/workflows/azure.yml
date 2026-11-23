@@ -14,6 +14,7 @@ on:
       - "config.py"
       - "store.py"
       - "ocems_api.py"
+      - "security.py"
       - "requirements.txt"
       - "chatbot/**"
       - "ml/**"

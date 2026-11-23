@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    {% include "_theme.html" %}
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Two-step sign-in | ReFlow</title>
+    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='brand-mark.svg') }}?v=blocks">
+    <link rel="stylesheet" href="{{ url_for('static', filename='auth.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='responsive.css') }}">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='design-system.css') }}">
+    <style>
+        .mfa-steps { margin: 0 0 18px; padding-left: 20px; display: grid; gap: 10px; color: var(--muted); font-size: 14px; line-height: 1.5; }
+        .mfa-steps b { color: var(--ink); }
+        .mfa-key { display: block; margin-top: 6px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px;
+                   background: var(--surface-2, var(--surface)); color: var(--ink); font: 600 15px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+                   letter-spacing: .06em; word-break: break-all; user-select: all; }
+        .mfa-link { font-size: 13px; }
+        .code-input { letter-spacing: .4em; font-size: 22px; text-align: center; font-variant-numeric: tabular-nums; }
+    </style>
+</head>
+<body>
+<main class="auth">
+    <div class="shell">
+        <section class="brand-panel">
+            <div class="brand-row">
+                <img src="{{ url_for('static', filename='brand-mark.svg') }}" alt="">
+                <span class="wordmark">Re<span>Flow</span></span>
+            </div>
+            <h1>Admin console,<br> <em>two keys to open.</em></h1>
+            <p class="lede">Admin accounts confirm every sign-in with a code from an authenticator app on your phone, so a leaked password alone can't open the console.</p>
+        </section>
+
+        <section class="login-panel" aria-labelledby="mfa-title">
+            {% if enroll %}
+                <h2 id="mfa-title">Set up two-step sign-in</h2>
+                <p class="subtitle">One-time setup for {{ email }}.</p>
+            {% else %}
+                <h2 id="mfa-title">Enter your code</h2>
+                <p class="subtitle">Open your authenticator app and enter the 6-digit code for ReFlow ({{ email }}).</p>
+            {% endif %}
+
+            {% if error %}<div class="message error" role="alert">{{ error }}</div>{% endif %}
+
+            {% if enroll %}
+                <ol class="mfa-steps">
+                    <li>Install an authenticator app if you don't have one: <b>Google Authenticator</b>, <b>Microsoft Authenticator</b> or <b>Authy</b>.</li>
+                    <li>In the app, add an account, choose <b>Enter a setup key</b>, and type this key (time based):
+                        <code class="mfa-key">{{ secret_groups }}</code>
+                        <a class="mfa-link" href="{{ otpauth }}">On this phone? Open it in your authenticator app</a></li>
+                    <li>Enter the 6-digit code the app shows.</li>
+                </ol>
+            {% endif %}
+
+            <form method="POST" action="{{ url_for('admin_mfa') }}">
+                <div class="field">
+                    <label for="code">6-digit code</label>
+                    <div class="input-wrap">
+                        <input id="code" class="code-input" name="code" type="text" inputmode="numeric"
+                               autocomplete="one-time-code" pattern="[0-9 ]{6,7}" maxlength="7" required autofocus>
+                    </div>
+                </div>
+                <button type="submit" class="login-btn">
+                    {{ "Turn on and sign in" if enroll else "Verify and sign in" }}
+                    <svg class="arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+                </button>
+            </form>
+
+            <div class="back">
+                <a href="{{ url_for('logout') }}">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12H5"/><path d="m12 19-7-7 7-7"/></svg>
+                    Cancel and sign out
+                </a>
+            </div>
+        </section>
+    </div>
+</main>
+</body>
+</html>

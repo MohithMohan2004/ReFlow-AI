@@ -189,3 +189,6 @@ database/stp_transfers.csv
 database/ocems_submissions.csv
 .env.azure
 .env.azure.bak
+
+# Runtime profile edits (real names and phone numbers); never commit
+data/profile_overrides.json

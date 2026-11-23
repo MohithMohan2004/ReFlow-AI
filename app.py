@@ -1,5 +1,5 @@
 from flask import Flask, jsonify, request, render_template, redirect, url_for, send_file, Response
-from flask import session
+from flask import session, flash
 from functools import wraps
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
@@ -16,6 +16,7 @@ import os
 import math
 import random
 import re
+import secrets
 import requests
 import pandas as pd
 import csv
@@ -100,6 +101,11 @@ def reverse_geocode_location(lat, lon):
 app = Flask(__name__)
 app.config.from_object(Config)
 
+import security  # noqa: E402  request limits, headers, CSRF
+
+security.init_app(app)
+reset_rate_limits = security.limiter.reset
+
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
@@ -155,6 +161,7 @@ def login_required(role=None):
             # do inside the console is checked by admin_required().
             allowed = ADMIN_ROLES if wanted == "admin" else {wanted}
             if role is not None and user_role not in allowed:
+                security.audit("permission_denied", need=wanted)
                 return redirect(url_for(ROLE_HOME_ENDPOINT[user_role]))
 
             return view_func(*args, **kwargs)
@@ -167,7 +174,7 @@ def login_required(role=None):
 # superadmin: the whole admin console.
 # admin: approvals only (plant and tanker registrations,
 #        vehicle document review).
-# Both roles are set in Supabase user_metadata.role; neither
+# Both roles are set in Supabase app_metadata.role; neither
 # can be chosen at public signup.
 # =========================================================
 ADMIN_ROLES = {"superadmin", "admin"}
@@ -178,6 +185,30 @@ ADMIN_SECTIONS = {
 }
 
 ADMIN_ROLE_LABELS = {"superadmin": "Super admin", "admin": "Admin"}
+
+
+PUBLIC_SIGNUP_ROLES = {"demand", "stp", "tanker"}
+
+
+def account_role(user):
+    """The role a signed-in Supabase user may act as.
+
+    app_metadata can only be written with the service role (server side),
+    so it is the source of truth, and the only one for admin roles.
+    user_metadata is chosen by the user and can be edited by them at any
+    time; it is accepted only for the three public signup roles, which grant
+    nothing by themselves (plants need an admin-approved plant account,
+    tankers an approved registration)."""
+    app_meta = getattr(user, "app_metadata", None) or {}
+    role = str(app_meta.get("role") or "").strip().lower()
+    if role in ROLE_HOME_ENDPOINT:
+        return role
+    claimed = str((getattr(user, "user_metadata", None) or {}).get("role") or "").strip().lower()
+    if claimed in PUBLIC_SIGNUP_ROLES:
+        return claimed
+    if claimed in ADMIN_ROLES:
+        security.audit("admin_role_claim_refused", account=getattr(user, "email", ""), claimed=claimed)
+    return ""
 
 
 def admin_sections(role=None):
@@ -196,6 +227,7 @@ def admin_required(section):
         @wraps(view_func)
         def wrapped_view(*args, **kwargs):
             if section not in admin_sections():
+                security.audit("permission_denied", need=f"admin:{section}")
                 if request.method == "GET":
                     return redirect(url_for("admin_dashboard"))
                 return "Your admin role does not allow this action.", 403
@@ -339,7 +371,11 @@ def has_request_expired(request_created_at):
 app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=7)
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
-app.config["SESSION_COOKIE_SECURE"] = False
+# Secure by default (HTTPS on Azure). Browsers also accept Secure cookies on
+# http://localhost; set SESSION_COOKIE_SECURE=0 only for plain-HTTP setups
+# such as the Android emulator talking to http://10.0.2.2.
+app.config["SESSION_COOKIE_SECURE"] = security.env_flag("SESSION_COOKIE_SECURE", True)
+app.config["SESSION_COOKIE_NAME"] = "session"
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -410,6 +446,33 @@ ROLE_HOME_ENDPOINT = {
     "tanker": "tanker_dashboard",
 }
 TANKER_LOCATIONS_TABLE = "tanker_locations"
+
+
+def save_tanker_location(payload):
+    """Upsert an operator's latest GPS fix. With DATABASE_URL (production) this
+    uses the server's own database connection, so public.tanker_locations
+    needs no policy for the public anon key."""
+    if store.enabled():
+        store.save_tanker_location(payload)
+        return
+    supabase.table(TANKER_LOCATIONS_TABLE).upsert(
+        payload,
+        on_conflict="tanker_operator_id"
+    ).execute()
+
+
+def get_tanker_location(tanker_operator_id):
+    """An operator's latest GPS fix as a dict, or None."""
+    if store.enabled():
+        return store.get_tanker_location(tanker_operator_id)
+    rows = (
+        supabase.table(TANKER_LOCATIONS_TABLE)
+        .select("*")
+        .eq("tanker_operator_id", tanker_operator_id)
+        .limit(1)
+        .execute()
+    ).data or []
+    return rows[0] if rows else None
 transfers_lock = threading.RLock()
 
 
@@ -547,6 +610,13 @@ def _active_ocems_feeds():
 
 
 ocems_api.start_warmer(_active_ocems_feeds)
+
+if ocems_api.missing_production_key_secret():
+    print(
+        "SECURITY WARNING: OCEMS_KEY_SECRET is not set. Stored OCEMS keys are "
+        "read with FLASK_SECRET_KEY and new keys can't be saved until it is set "
+        "."
+    )
 
 # =========================================================
 # TANKER VEHICLES
@@ -1122,7 +1192,7 @@ def safe_float(value, default=0.0):
         if value in (None, ""):
             return default
 
-        return float(value)
+        return security.finite_float(value)
 
     except (TypeError, ValueError):
         return default
@@ -2151,6 +2221,13 @@ def save_stps(stps):
         json.dump({"stps": stps}, f, indent=4)
 
 def auto_reset_capacity():
+    """Runs under the cross-process data lock (re-entrant), so it is safe
+    from lock-free endpoints too (SECURITY pentest PT-10)."""
+    with security.data_lock():
+        return _auto_reset_capacity_unlocked()
+
+
+def _auto_reset_capacity_unlocked():
     """Release STP capacity for accepted orders exactly 24 hours after acceptance."""
     now = datetime.now()
     stps = load_stps()
@@ -2426,6 +2503,7 @@ def load_ocems_data(stp_id):
 # =========================================================
 
 SPA_INDEX = os.path.join(app.root_path, "static", "app", "index.html")
+security.remember_spa_scripts(SPA_INDEX)
 
 
 def serve_spa():
@@ -2503,6 +2581,15 @@ def login():
             login_error="Please enter your email and password."
         )
 
+    login_identifier = security.normalize_identity(login_identifier)
+
+    if security.login_fields_invalid(login_identifier, password):
+        security.audit("login_failed", account=login_identifier, reason="input_too_long")
+        return render_template(
+            "login.html",
+            login_error="Invalid email or password."
+        )
+
     # Supabase signs in by email only; a username always fails as
     # "invalid credentials", which looks like a wrong password.
     if "@" not in login_identifier:
@@ -2546,9 +2633,7 @@ def login():
             user.email or ""
         ).strip().lower()
 
-        role = str(
-            metadata.get("role") or ""
-        ).strip().lower()
+        role = account_role(user)
 
         # =====================================================
         # DEBUG
@@ -2603,6 +2688,7 @@ def login():
         session["user_id"] = str(
             user.id
         )
+        session["epoch"] = session_epoch(user.id)
 
         session["first_name"] = str(
             metadata.get("first_name") or ""
@@ -2649,13 +2735,11 @@ def login():
         if role in ADMIN_ROLES:
 
             print(
-                "ADMIN LOGIN:",
+                "ADMIN LOGIN (password ok, code next):",
                 authenticated_email
             )
 
-            return redirect(
-                url_for("admin_dashboard")
-            )
+            return start_admin_mfa()
 
         # =====================================================
         # DEMAND USER LOGIN
@@ -2686,8 +2770,20 @@ def login():
 
         elif role == "stp":
 
+            # The plant comes from an admin-approved plant account, not
+            # from user_metadata (which the user can edit).
+            plant_account = stp_account_for(user.id) or request_stp_account(
+                user.id, authenticated_email, session.get("user_name"),
+                session.get("user_phone"), metadata.get("stp_id")
+            )
+            block = stp_login_block_message(plant_account)
+
+            if block:
+                session.clear()
+                return render_template("login.html", login_error=block)
+
             stp_id = str(
-                metadata.get("stp_id") or ""
+                plant_account.get("stp_id") or ""
             ).strip()
 
             if not stp_id:
@@ -2901,6 +2997,8 @@ def login():
 
         session.clear()
 
+        security.audit("login_failed", account=login_identifier, reason=getattr(e, "code", "") or type(e).__name__)
+
         return render_template(
             "login.html",
             login_error=login_error_message(e)
@@ -3047,6 +3145,21 @@ def signup():
     # IMPORTANT:
     # This applies to ALL roles.
     # =========================================================
+
+    email = security.normalize_identity(email)
+    username = security.normalize_identity(username)
+
+    field_error = security.signup_field_error(
+        email, password, username, first_name, last_name, mobile
+    ) or security.identity_error(email, username)
+
+    if field_error:
+
+        return render_template(
+            "signup.html",
+            stps=stps,
+            signup_error=field_error
+        )
 
     if password != confirm_password:
 
@@ -3366,15 +3479,23 @@ def signup():
         print("======================================")
         print("")
 
-        return redirect(
-            url_for(
-                "login",
-                signup_success=(
-                    "Account created successfully. "
-                    "Please log in."
-                )
+        if role == "stp":
+            plant_account = request_stp_account(
+                response.user.id, email, f"{first_name} {last_name}".strip(), mobile, stp_id
             )
-        )
+
+            # Messages travel in the signed session, never in the URL, so
+            # nobody can make the login page show their own text (pentest PT-07).
+            flash(
+                "Account created. The ReFlow team will check that you run "
+                f"{plant_account.get('stp_name') or stp_id} and approve your access; "
+                "you can sign in after that.",
+                "success"
+            )
+            return redirect(url_for("login"))
+
+        flash("Account created successfully. Please log in.", "success")
+        return redirect(url_for("login"))
 
     # =========================================================
     # SUPABASE ERROR
@@ -3432,6 +3553,7 @@ def logout():
     except Exception as e:
         print("Supabase logout error:", e)
 
+    end_all_sessions(session.get("user_id"))
     session.clear()
 
     return redirect(url_for("login"))
@@ -3450,15 +3572,12 @@ def delete_account():
         # Clear Flask session
         session.clear()
 
-        return redirect(
-            url_for(
-                "login",
-                account_deleted=(
-                    "You have been logged out. "
-                    "Account deletion requires Supabase admin configuration."
-                )
-            )
+        flash(
+            "You have been logged out. "
+            "Account deletion requires Supabase admin configuration.",
+            "success"
         )
+        return redirect(url_for("login"))
 
     except Exception as e:
         print("Supabase account deletion error:", e)
@@ -3524,11 +3643,13 @@ def api_profile_update():
     body = request.get_json(silent=True) or {}
     first_name = str(body.get("first_name") or "").strip()[:60]
     last_name = str(body.get("last_name") or "").strip()[:60]
-    username = str(body.get("username") or "").strip()[:40]
+    username = security.normalize_identity(body.get("username"))[:40]
     mobile = re.sub(r"[\s-]", "", str(body.get("mobile") or ""))
 
     if not first_name:
         return jsonify({"success": False, "error": "First name is required."}), 400
+    if username and security.identity_error(None, username):
+        return jsonify({"success": False, "error": security.identity_error(None, username)}), 400
     if mobile and not re.fullmatch(r"\+?\d{10,13}", mobile):
         return jsonify({"success": False, "error": "Enter a valid mobile number."}), 400
 
@@ -3615,11 +3736,11 @@ def api_stp_details_update():
     if quality_grade not in STP_GRADES:
         return fail("Choose a quality grade.")
     try:
-        total_mld = float(body.get("total_capacity_kld")) / 1000
-        load_mld = float(body.get("current_load_kld")) / 1000
-        cost = float(body.get("treatment_cost_per_kl"))
-        lat = float(body.get("latitude"))
-        lon = float(body.get("longitude"))
+        total_mld = security.finite_float(body.get("total_capacity_kld"), 0, 10_000_000) / 1000
+        load_mld = security.finite_float(body.get("current_load_kld"), 0, 10_000_000) / 1000
+        cost = security.finite_float(body.get("treatment_cost_per_kl"), 0, 100_000)
+        lat = security.finite_float(body.get("latitude"), -90, 90)
+        lon = security.finite_float(body.get("longitude"), -180, 180)
     except (TypeError, ValueError):
         return fail("Enter numbers for capacity, load, cost and location.")
     if not all(math.isfinite(v) for v in (total_mld, load_mld, cost, lat, lon)):
@@ -3672,6 +3793,295 @@ def api_stp_details_update():
 # OCEMS API CONNECTION (plant side, from the profile page)
 # =========================================================
 
+# =========================================================
+# SESSION REVOCATION (pentest PT-03)
+# Sessions are signed cookies, so the server can't delete one. Each user
+# has an epoch number; a session is valid only while it carries the
+# current one. Logging out bumps it, which ends every copy of every
+# session of that user (all devices). Missing = epoch 0, so sessions made
+# before this change keep working until the user's next logout.
+# =========================================================
+
+SESSION_EPOCHS_FILE = os.path.join(BASE_DIR, "data", "session_epochs.json")
+
+
+def load_session_epochs():
+    if not store.exists(SESSION_EPOCHS_FILE) or store.getsize(SESSION_EPOCHS_FILE) == 0:
+        return {}
+    try:
+        with store.open(SESSION_EPOCHS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (ValueError, OSError):
+        return {}
+
+
+def session_epoch(user_id):
+    return int(load_session_epochs().get(str(user_id), 0) or 0)
+
+
+def end_all_sessions(user_id):
+    """Invalidate every session of this user."""
+    if not user_id:
+        return
+    with security.data_lock():
+        epochs = load_session_epochs()
+        epochs[str(user_id)] = int(epochs.get(str(user_id), 0) or 0) + 1
+        with store.open(SESSION_EPOCHS_FILE, "w", encoding="utf-8") as f:
+            json.dump(epochs, f)
+    security.audit("sessions_ended", account=str(user_id))
+
+
+# =========================================================
+# PLANT ACCOUNTS (admin approval)
+# A plant signup only names a plant ID, and plant IDs are public, so a
+# signup alone must never grant control of a plant. Each plant user gets a
+# row here (pending -> approved / rejected by an admin in Approvals), and
+# plant login and every plant request require an approved row.
+# The plant comes from this row, never from Supabase user_metadata.
+# =========================================================
+
+STP_ACCOUNTS_FILE = os.path.join(DATABASE_DIR, "stp_accounts.csv")
+
+STP_ACCOUNT_FIELDS = [
+    "link_id", "user_id", "email", "name", "phone", "stp_id", "stp_name",
+    "status", "requested_at", "reviewed_at", "reviewed_by",
+]
+
+STP_ACCOUNT_PENDING = "pending"
+STP_ACCOUNT_APPROVED = "approved"
+STP_ACCOUNT_REJECTED = "rejected"
+
+stp_accounts_lock = threading.RLock()
+
+
+def load_stp_accounts():
+    with stp_accounts_lock:
+        if not store.exists(STP_ACCOUNTS_FILE) or store.getsize(STP_ACCOUNTS_FILE) == 0:
+            return []
+        with store.open(STP_ACCOUNTS_FILE, "r", newline="", encoding="utf-8") as f:
+            return list(csv.DictReader(f))
+
+
+def save_stp_accounts(rows):
+    with stp_accounts_lock:
+        with store.open(STP_ACCOUNTS_FILE, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=STP_ACCOUNT_FIELDS)
+            writer.writeheader()
+            for row in rows:
+                writer.writerow({k: row.get(k, "") for k in STP_ACCOUNT_FIELDS})
+
+
+def stp_account_for(user_id):
+    """The newest plant-account row for this Supabase user, or None."""
+    user_id = str(user_id or "").strip()
+    if not user_id:
+        return None
+    rows = [r for r in load_stp_accounts() if str(r.get("user_id") or "").strip() == user_id]
+    return rows[-1] if rows else None
+
+
+def approved_stp_id(user_id):
+    row = stp_account_for(user_id)
+    if row and row.get("status") == STP_ACCOUNT_APPROVED:
+        return str(row.get("stp_id") or "").strip() or None
+    return None
+
+
+def request_stp_account(user_id, email, name, phone, stp_id):
+    """File a pending request (once) and return the user's current row."""
+    with security.data_lock(), stp_accounts_lock:
+        existing = stp_account_for(user_id)
+        if existing is not None:
+            return existing
+        stp = get_stp_by_id(stp_id) or {}
+        row = {
+            "link_id": "PLA-" + secrets.token_hex(5).upper(),
+            "user_id": str(user_id),
+            "email": str(email or "").strip().lower(),
+            "name": str(name or "").strip(),
+            "phone": str(phone or "").strip(),
+            "stp_id": str(stp.get("stp_id") or stp_id or "").strip(),
+            "stp_name": str(stp.get("stp_name") or "").strip(),
+            "status": STP_ACCOUNT_PENDING,
+            "requested_at": datetime.now().isoformat(timespec="seconds"),
+        }
+        save_stp_accounts(load_stp_accounts() + [row])
+        security.audit("plant_access_requested", account=row["email"], stp=row["stp_id"])
+        return row
+
+
+def stp_login_block_message(row):
+    """None when the plant user may sign in, else the reason to show."""
+    status = (row or {}).get("status")
+    if status == STP_ACCOUNT_APPROVED:
+        return None
+    if status == STP_ACCOUNT_REJECTED:
+        return "Your request to manage this plant was not approved. Contact the ReFlow team."
+    plant = (row or {}).get("stp_name") or (row or {}).get("stp_id") or "this plant"
+    return (
+        f"Your access to {plant} is waiting for approval by the ReFlow team. "
+        "You can sign in once it's approved."
+    )
+
+
+@app.before_request
+def enforce_plant_approval():
+    """Sign out sessions that are no longer allowed:
+    - plant sessions without an approved plant-account row (sessions opened
+      before approval existed, or access revoked);
+    - admin sessions that didn't pass the two-step code, or are older than
+      ADMIN_SESSION_SECONDS (12 h)."""
+    if request.path.startswith("/static/") or request.endpoint in ("health", "login", "logout", "api_login", "api_logout", "admin_mfa"):
+        return None
+    if not session.get("user_id"):
+        return None
+    if int(session.get("epoch") or 0) != session_epoch(session.get("user_id")):
+        security.audit("session_revoked_used")
+        session.clear()
+        if request.path.startswith("/api/"):
+            return jsonify({"success": False, "error": "Please sign in again."}), 401
+        return redirect(url_for("login"))
+    role = str(session.get("role") or "").strip().lower()
+    if role in ADMIN_ROLES:
+        age = time.time() - float(session.get("auth_at") or 0)
+        if session.get("mfa_ok") is True and 0 <= age <= security.ADMIN_SESSION_SECONDS:
+            return None
+        security.audit("admin_session_ended", reason="no_code" if not session.get("mfa_ok") else "expired")
+        session.clear()
+        if request.path.startswith("/api/"):
+            return jsonify({"success": False, "error": "Please sign in again."}), 401
+        return redirect(url_for("login"))
+    if role != "stp":
+        return None
+    approved = approved_stp_id(session.get("user_id"))
+    if approved and approved == str(session.get("stp_id") or "").strip():
+        return None
+    security.audit("plant_session_revoked", stp=session.get("stp_id") or "-")
+    session.clear()
+    if request.path.startswith("/api/"):
+        return jsonify({"success": False, "error": "Please sign in again."}), 401
+    return redirect(url_for("login"))
+
+
+# =========================================================
+# ADMIN TWO-STEP SIGN-IN (TOTP)
+# After the password, an admin must enter a 6-digit code from an
+# authenticator app. The first time, the page sets the app up. Secrets are
+# stored encrypted; each code works once; 5 wrong codes lock for 15 min.
+# Reset a lost phone with scripts/reset_admin_mfa.py <email>.
+# =========================================================
+
+ADMIN_MFA_FILE = os.path.join(DATABASE_DIR, "admin_mfa.csv")
+ADMIN_MFA_FIELDS = ["user_id", "email", "secret_enc", "enabled_at", "last_step", "failed_count", "locked_until"]
+admin_mfa_lock = threading.RLock()
+
+
+def load_admin_mfa():
+    with admin_mfa_lock:
+        if not store.exists(ADMIN_MFA_FILE) or store.getsize(ADMIN_MFA_FILE) == 0:
+            return []
+        with store.open(ADMIN_MFA_FILE, "r", newline="", encoding="utf-8") as f:
+            return list(csv.DictReader(f))
+
+
+def save_admin_mfa(rows):
+    with admin_mfa_lock:
+        with store.open(ADMIN_MFA_FILE, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=ADMIN_MFA_FIELDS)
+            writer.writeheader()
+            for row in rows:
+                writer.writerow({k: row.get(k, "") for k in ADMIN_MFA_FIELDS})
+
+
+def start_admin_mfa():
+    """Park the signed-in admin's session values until the code is checked."""
+    values = dict(session)
+    session.clear()
+    session.permanent = True
+    session["mfa_pending"] = {"values": values, "started": time.time()}
+    return redirect(url_for("admin_mfa"))
+
+
+def _finish_admin_login(values):
+    session.clear()
+    session.update(values)
+    session.permanent = True
+    session["mfa_ok"] = True
+    session["auth_at"] = time.time()
+    security.audit("admin_login_ok", account=values.get("user_email"))
+    return redirect(url_for("admin_dashboard"))
+
+
+@app.route("/admin/mfa", methods=["GET", "POST"])
+def admin_mfa():
+    pending = session.get("mfa_pending") or {}
+    values = pending.get("values") or {}
+    started = float(pending.get("started") or 0)
+    if not values.get("user_id") or time.time() - started > security.MFA_PENDING_SECONDS:
+        session.clear()
+        return render_template("login.html", login_error="Your sign-in timed out. Sign in again.")
+
+    user_id = str(values["user_id"])
+    email = values.get("user_email") or ""
+    error = None
+
+    with admin_mfa_lock:
+        rows = load_admin_mfa()
+        record = next((r for r in rows if r.get("user_id") == user_id), None)
+
+        if record is None:
+            # First sign-in after two-step became required: set it up.
+            secret = pending.get("enroll_secret")
+            if not secret:
+                secret = security.new_totp_secret()
+                pending["enroll_secret"] = secret
+                session["mfa_pending"] = pending
+            if request.method == "POST":
+                step = security.totp_match(secret, request.form.get("code"))
+                if step is not None:
+                    rows.append({"user_id": user_id, "email": email,
+                                 "secret_enc": security.encrypt_mfa_secret(secret),
+                                 "enabled_at": datetime.now().isoformat(timespec="seconds"),
+                                 "last_step": str(step), "failed_count": "0", "locked_until": ""})
+                    save_admin_mfa(rows)
+                    security.audit("admin_mfa_enrolled", account=email)
+                    return _finish_admin_login(values)
+                error = "That code didn't match. Check the time on your phone and try the newest code."
+                security.audit("admin_mfa_failed", account=email, stage="setup")
+            return render_template("admin_mfa.html", enroll=True, secret=secret,
+                                   secret_groups=" ".join(secret[i:i + 4] for i in range(0, len(secret), 4)),
+                                   otpauth=security.otpauth_uri(secret, email or user_id),
+                                   email=email, error=error)
+
+        if request.method == "POST":
+            locked_until = float(record.get("locked_until") or 0)
+            if locked_until > time.time():
+                error = "Too many wrong codes. Wait 15 minutes, then sign in again."
+                security.audit("admin_mfa_locked", account=email)
+            else:
+                secret = security.decrypt_mfa_secret(record.get("secret_enc"))
+                step = security.totp_match(secret, request.form.get("code"),
+                                           last_step=int(record.get("last_step") or -1)) if secret else None
+                if step is not None:
+                    record.update(last_step=str(step), failed_count="0", locked_until="")
+                    save_admin_mfa(rows)
+                    return _finish_admin_login(values)
+                failures = int(record.get("failed_count") or 0) + 1
+                record["failed_count"] = str(failures)
+                if failures >= security.MFA_MAX_FAILURES:
+                    record["locked_until"] = str(time.time() + security.MFA_LOCK_SECONDS)
+                    record["failed_count"] = "0"
+                    session.clear()
+                    error = "Too many wrong codes. Wait 15 minutes, then sign in again."
+                else:
+                    error = "That code didn't match. Try the newest code from your authenticator app."
+                save_admin_mfa(rows)
+                security.audit("admin_mfa_failed", account=email, failures=failures)
+
+    return render_template("admin_mfa.html", enroll=False, email=email, error=error)
+
+
 def _session_stp_id():
     if str(session.get("role") or "").strip().lower() != "stp":
         return None
@@ -3707,6 +4117,8 @@ def api_ocems_connection_submit():
     stp_id = _session_stp_id()
     if not stp_id or not get_stp_by_id(stp_id):
         return jsonify({"success": False, "error": "Only plant accounts can connect an OCEMS feed."}), 403
+    if ocems_api.missing_production_key_secret():
+        return jsonify({"success": False, "error": "OCEMS keys can't be saved right now. Ask the ReFlow team to finish the server setup."}), 503
 
     body = request.get_json(silent=True) or {}
     provider = str(body.get("provider") or "trata").strip().lower()
@@ -3732,7 +4144,7 @@ def api_ocems_connection_submit():
         return jsonify({"success": False, "error": test_message}), 400
     now = datetime.now().isoformat(timespec="seconds")
 
-    with ocems_api_lock:
+    with security.data_lock(), ocems_api_lock:
         rows = load_ocems_api_connections()
         # One live feed per plant: a working new key replaces the old one.
         for row in rows:
@@ -3910,6 +4322,15 @@ def api_login():
             "message": "Please enter your email and password."
         }), 400
 
+    login_identifier = security.normalize_identity(login_identifier)
+
+    if security.login_fields_invalid(login_identifier, password):
+        security.audit("login_failed", account=login_identifier, reason="input_too_long")
+        return jsonify({
+            "success": False,
+            "message": "Invalid email or password."
+        }), 401
+
     try:
         # Use the same Supabase Auth login as the existing web login.
         response = supabase.auth.sign_in_with_password({
@@ -3934,6 +4355,7 @@ def api_login():
         session.permanent = True
 
         session["user_id"] = str(user.id)
+        session["epoch"] = session_epoch(user.id)
 
         session["first_name"] = str(
             metadata.get("first_name", "")
@@ -3960,9 +4382,7 @@ def api_login():
             user.email or ""
         )
 
-        session["role"] = str(
-            metadata.get("role", "")
-        ).strip().lower()
+        session["role"] = account_role(user)
 
         apply_profile_overrides_to_session()
 
@@ -3981,14 +4401,51 @@ def api_login():
             session["buyer_phone"] = session["user_phone"]
 
         elif session["role"] == "tanker":
-            session["tanker_operator_name"] = (
-                session["user_name"]
+            # Same rule as the web login: the operator comes from the
+            # approved registration with this email, never from
+            # user_metadata, which the user can edit.
+            operator = get_tanker_operator_by_email(
+                str(user.email or "").strip().lower()
             )
 
-        elif session["role"] == "stp":
-            stp_id = str(
-                session.get("stp_id") or ""
+            if (
+                operator is None
+                or str(operator.get("verification_status") or "").strip().lower() != "approved"
+                or not str(operator.get("operator_id") or "").strip()
+            ):
+                session.clear()
+
+                return jsonify({
+                    "success": False,
+                    "message": (
+                        "No approved tanker operator registration "
+                        "is linked to this email address."
+                    )
+                }), 403
+
+            session["tanker_operator_id"] = str(operator.get("operator_id")).strip()
+            session["tanker_operator_name"] = str(
+                operator.get("operator_name") or session["user_name"] or ""
             ).strip()
+            session["tanker_operator_email"] = str(user.email or "").strip().lower()
+
+        elif session["role"] == "stp":
+            plant_account = stp_account_for(user.id) or request_stp_account(
+                user.id, user.email, session.get("user_name"),
+                session.get("user_phone"), metadata.get("stp_id")
+            )
+            block = stp_login_block_message(plant_account)
+
+            if block:
+                session.clear()
+
+                return jsonify({
+                    "success": False,
+                    "message": block
+                }), 403
+
+            stp_id = str(plant_account.get("stp_id") or "").strip()
+            session["stp_id"] = stp_id
 
             if not stp_id:
                 session.clear()
@@ -3997,6 +4454,15 @@ def api_login():
                     "success": False,
                     "message": "No STP is assigned to this account."
                 }), 403
+
+        # Admin accounts need the two-step sign-in, which only the website has.
+        if session["role"] in ADMIN_ROLES:
+            session.clear()
+
+            return jsonify({
+                "success": False,
+                "message": "Admin accounts sign in on the ReFlow website (two-step verification)."
+            }), 403
 
         # Match the existing web login's invalid-role behavior.
         if session["role"] not in ROLE_HOME_ENDPOINT:
@@ -4026,6 +4492,7 @@ def api_login():
 
     except Exception as e:
         print("Flutter API login error:", e)
+        security.audit("login_failed", account=login_identifier, reason=getattr(e, "code", "") or type(e).__name__)
 
         return jsonify({
             "success": False,
@@ -4190,6 +4657,19 @@ def api_signup():
                 )
             }), 400
 
+    email = security.normalize_identity(email)
+    username = security.normalize_identity(username)
+
+    field_error = security.signup_field_error(
+        email, password, username, first_name, last_name, mobile
+    ) or security.identity_error(email, username)
+
+    if field_error:
+        return jsonify({
+            "success": False,
+            "message": field_error
+        }), 400
+
     if password != confirm_password:
         return jsonify({
             "success": False,
@@ -4241,9 +4721,18 @@ def api_signup():
                 )
             }), 400
 
+        pending_plant = None
+        if role == "stp":
+            pending_plant = request_stp_account(
+                response.user.id, email, f"{first_name} {last_name}".strip(), mobile, stp_id
+            )
+
         return jsonify({
             "success": True,
             "message": (
+                "Account created. An admin must approve your access to "
+                f"{pending_plant.get('stp_name') or stp_id} before you can sign in."
+                if pending_plant else
                 "Account created successfully. "
                 "Please log in."
             ),
@@ -4286,6 +4775,7 @@ def api_logout():
     except Exception as e:
         print("Flutter API Supabase logout error:", e)
 
+    end_all_sessions(session.get("user_id"))
     session.clear()
 
     return jsonify({
@@ -6046,6 +6536,12 @@ def admin_dashboard():
         stp_registrations=
             stp_registrations,
 
+        stp_accounts=sorted(
+            load_stp_accounts(),
+            key=lambda r: r.get("requested_at") or "",
+            reverse=True
+        ),
+
         vehicles_by_operator=
             vehicles_by_operator,
 
@@ -6053,7 +6549,29 @@ def admin_dashboard():
             documents_by_vehicle
     )
 
-@app.route("/admin/tanker/<operator_id>/status/<status>")
+@app.route("/admin/stp_account/<link_id>/<status>", methods=["POST"])
+@admin_required("approvals")
+def update_stp_account_status(link_id, status):
+    if status not in (STP_ACCOUNT_APPROVED, STP_ACCOUNT_REJECTED):
+        return "Invalid status.", 400
+
+    with stp_accounts_lock:
+        rows = load_stp_accounts()
+        row = next((r for r in rows if r.get("link_id") == link_id), None)
+        if row is None:
+            return "Plant account request not found.", 404
+        if status == STP_ACCOUNT_APPROVED and not get_stp_by_id(row.get("stp_id")):
+            return "That plant is no longer in the network.", 400
+        row["status"] = status
+        row["reviewed_at"] = datetime.now().isoformat(timespec="seconds")
+        row["reviewed_by"] = str(session.get("user_email") or session.get("user_id") or "")
+        save_stp_accounts(rows)
+
+    security.audit("plant_access_" + status, link=link_id, stp=row.get("stp_id"))
+    return redirect(url_for("admin_dashboard") + "#approvals")
+
+
+@app.route("/admin/tanker/<operator_id>/status/<status>", methods=["POST"])
 @admin_required("approvals")
 def update_tanker_status(operator_id, status):
 
@@ -6127,15 +6645,29 @@ def update_tanker_status(operator_id, status):
 def add_stp():
     stps = load_stps()
 
+    try:
+        stp_id = str(request.form["id"]).strip()[:40]
+        stp_name = str(request.form["name"]).strip()[:120]
+        latitude = security.finite_float(request.form["lat"], -90, 90)
+        longitude = security.finite_float(request.form["lon"], -180, 180)
+        capacity = security.finite_float(request.form["capacity"], 0, 10_000)
+    except (KeyError, TypeError, ValueError):
+        return "Enter a plant ID, name, valid coordinates and capacity.", 400
+
+    if not stp_id or not stp_name:
+        return "Enter a plant ID and name.", 400
+    if any(str(s.get("stp_id")).strip().lower() == stp_id.lower() for s in stps):
+        return "A plant with that ID already exists.", 400
+
     new_stp = {
-        "stp_id": request.form["id"],
-        "stp_name": request.form["name"],
-        "latitude": float(request.form["lat"]),
-        "longitude": float(request.form["lon"]),
+        "stp_id": stp_id,
+        "stp_name": stp_name,
+        "latitude": latitude,
+        "longitude": longitude,
         "technology": "Manual",
-        "total_capacity_mld": float(request.form["capacity"]),
+        "total_capacity_mld": capacity,
         "current_load_mld": 0.0,
-        "available_capacity_mld": float(request.form["capacity"]),
+        "available_capacity_mld": capacity,
         "treatment_cost_per_kl": 5.0,
         "quality_grade": "General",
 
@@ -6152,7 +6684,7 @@ def add_stp():
 # =========================
 # DELETE STP
 # =========================
-@app.route("/admin/delete_stp/<stp_id>")
+@app.route("/admin/delete_stp/<stp_id>", methods=["POST"])
 @admin_required("plants")
 def delete_stp(stp_id):
     stps = load_stps()
@@ -6438,7 +6970,7 @@ def api_search_place():
             }), 400
 
     try:
-        required_kld = float(request.args.get("required_kld", 0) or 0)
+        required_kld = security.finite_float(request.args.get("required_kld", 0) or 0, 0, 10_000_000)
     except (TypeError, ValueError):
         required_kld = 0.0
 
@@ -6688,8 +7220,8 @@ def resolve_delivery_coordinates(data):
 
     try:
         if lat is not None and lon is not None:
-            lat_value = float(lat)
-            lon_value = float(lon)
+            lat_value = security.finite_float(lat, -90, 90)
+            lon_value = security.finite_float(lon, -180, 180)
 
             # 0,0 is not a valid delivery location for this application.
             # Treat it as missing so an older/broken field does not override
@@ -6768,7 +7300,7 @@ def create_order():
     # DEMAND REQUIREMENTS
     # -------------------------------------------------------------
     try:
-        requested_kld = float(data.get("quantity_kld") or 0)
+        requested_kld = security.finite_float(data.get("quantity_kld") or 0, maximum=10_000_000)
     except (TypeError, ValueError):
         return jsonify({"error": "Invalid quantity"}), 400
 
@@ -7141,21 +7673,10 @@ def order_tanker_location(order_id):
     # -----------------------------------------
 
     current_user_id = session.get("user_id")
-    current_buyer_name = session.get("buyer_name") or session.get("user_name")
-    current_buyer_phone = session.get("buyer_phone") or session.get("user_phone")
     current_role = str(session.get("role") or "").strip().lower()
     current_stp_id = str(session.get("stp_id") or "").strip()
 
-    is_buyer_owner = (
-        current_user_id and
-        order.get("buyer_user_id", "") == current_user_id
-    ) or (
-        not order.get("buyer_user_id", "") and
-        current_buyer_name and
-        current_buyer_phone and
-        order.get("buyer_name") == current_buyer_name and
-        order.get("buyer_phone") == current_buyer_phone
-    )
+    is_buyer_owner = buyer_owns_order(order)
 
     is_stp_owner = (
         current_role == "stp"
@@ -7191,19 +7712,16 @@ def order_tanker_location(order_id):
         })
 
     try:
-        response = (
-            supabase.table(TANKER_LOCATIONS_TABLE)
-            .select(
-                "latitude, longitude, accuracy, speed, heading, "
-                "recorded_at, updated_at"
-            )
-            .eq("tanker_operator_id", tanker_operator_id)
-            .limit(1)
-            .execute()
-        )
-        rows = response.data or []
+        location = get_tanker_location(tanker_operator_id)
+        if location:
+            location = {
+                key: location.get(key)
+                for key in ("latitude", "longitude", "accuracy", "speed",
+                            "heading", "recorded_at", "updated_at")
+            }
+        rows = [location] if location else []
     except Exception as e:
-        print("Supabase order tanker location fetch error:", e)
+        print("Order tanker location fetch error:", e)
         return jsonify({
             "success": True,
             "order_status": order.get("status", ""),
@@ -7345,19 +7863,8 @@ def invoice():
 
     # Only allow the logged-in buyer to view their own invoice.
     current_user_id = session.get("user_id")
-    current_buyer_name = session.get("buyer_name") or session.get("user_name")
-    current_buyer_phone = session.get("buyer_phone") or session.get("user_phone")
 
-    authorized = (
-        current_user_id and
-        order.get("buyer_user_id", "") == current_user_id
-    ) or (
-        not order.get("buyer_user_id", "") and
-        current_buyer_name and
-        current_buyer_phone and
-        order.get("buyer_name") == current_buyer_name and
-        order.get("buyer_phone") == current_buyer_phone
-    )
+    authorized = buyer_owns_order(order)
 
     if not authorized:
         return "Unauthorized", 403
@@ -7627,6 +8134,22 @@ def build_invoice_context(order, distance_km=None):
 # PAYMENT / BOOKING CONFIRMATION
 # =========================================================
 
+def buyer_owns_order(row):
+    """True only when the order carries the logged-in buyer's user id.
+
+    Orders without buyer_user_id (made before user ids were stored) used to
+    match on buyer name + phone, but both are chosen by the user at signup or
+    on the profile page, so anyone could claim them."""
+    current_user_id = str(session.get("user_id") or "").strip()
+    return bool(current_user_id) and str(row.get("buyer_user_id") or "").strip() == current_user_id
+
+
+def legacy_order_awaiting_payment(row):
+    payment_status = str(row.get("payment_status") or "pending").strip().lower()
+    order_status = str(row.get("status") or "pending").strip().lower()
+    return payment_status == "pending" and order_status == "pending"
+
+
 @app.route("/pay_now", methods=["POST"])
 def pay_now():
     order_id = request.form.get("order_id", "").strip()
@@ -7679,22 +8202,16 @@ def pay_now():
         for row in reader:
             if row.get("order_id", "").strip() == order_id:
                 current_user_id = session.get("user_id")
-                current_buyer_name = session.get("buyer_name") or session.get("user_name")
-                current_buyer_phone = session.get("buyer_phone") or session.get("user_phone")
 
-                authorized = (
-                    current_user_id and
-                    row.get("buyer_user_id", "") == current_user_id
-                ) or (
-                    not row.get("buyer_user_id", "") and
-                    current_buyer_name and
-                    current_buyer_phone and
-                    row.get("buyer_name") == current_buyer_name and
-                    row.get("buyer_phone") == current_buyer_phone
-                )
+                authorized = buyer_owns_order(row)
 
                 if not authorized:
                     return "Unauthorized", 403
+
+                # Only a legacy order still waiting for its payment choice
+                # may be confirmed; never reset a placed/delivered/failed one.
+                if not legacy_order_awaiting_payment(row):
+                    return "This order has already been confirmed.", 400
 
                 row["status"] = "Pending"
                 row["payment_status"] = "Paid"
@@ -7767,22 +8284,16 @@ def confirm_cod():
         for row in reader:
             if row.get("order_id", "").strip() == order_id:
                 current_user_id = session.get("user_id")
-                current_buyer_name = session.get("buyer_name") or session.get("user_name")
-                current_buyer_phone = session.get("buyer_phone") or session.get("user_phone")
 
-                authorized = (
-                    current_user_id and
-                    row.get("buyer_user_id", "") == current_user_id
-                ) or (
-                    not row.get("buyer_user_id", "") and
-                    current_buyer_name and
-                    current_buyer_phone and
-                    row.get("buyer_name") == current_buyer_name and
-                    row.get("buyer_phone") == current_buyer_phone
-                )
+                authorized = buyer_owns_order(row)
 
                 if not authorized:
                     return "Unauthorized", 403
+
+                # Only a legacy order still waiting for its payment choice
+                # may be confirmed; never reset a placed/delivered/failed one.
+                if not legacy_order_awaiting_payment(row):
+                    return "This order has already been confirmed.", 400
 
                 row["status"] = "Pending"
                 row["payment_status"] = "Cash on Delivery"
@@ -7825,7 +8336,7 @@ def cancel_cod():
         # Return immediately to the previous page instead of loading the
         # full Demand page again. This keeps cancellation fast.
         return Response(
-            "<script>window.history.back();</script>",
+            f'<script nonce="{security.csp_nonce()}">window.history.back();</script>',
             mimetype="text/html"
         )
 
@@ -7844,19 +8355,8 @@ def cancel_cod():
         for row in reader:
             if row.get("order_id", "").strip() == order_id:
                 current_user_id = session.get("user_id")
-                current_buyer_name = session.get("buyer_name") or session.get("user_name")
-                current_buyer_phone = session.get("buyer_phone") or session.get("user_phone")
 
-                authorized = (
-                    current_user_id and
-                    row.get("buyer_user_id", "") == current_user_id
-                ) or (
-                    not row.get("buyer_user_id", "") and
-                    current_buyer_name and
-                    current_buyer_phone and
-                    row.get("buyer_name") == current_buyer_name and
-                    row.get("buyer_phone") == current_buyer_phone
-                )
+                authorized = buyer_owns_order(row)
 
                 if not authorized:
                     return "Unauthorized", 403
@@ -7883,7 +8383,7 @@ def cancel_cod():
     # Return immediately without re-rendering the Demand dashboard.
     # This prevents the cancellation request from waiting on the full page load.
     return Response(
-        "<script>window.history.back();</script>",
+        f'<script nonce="{security.csp_nonce()}">window.history.back();</script>',
         mimetype="text/html"
     )
 
@@ -7950,10 +8450,8 @@ def stp_orders():
 @app.route("/api/my_orders")
 def my_orders():
     user_id = session.get("user_id")
-    buyer_name = session.get("buyer_name") or session.get("user_name")
-    buyer_phone = session.get("buyer_phone") or session.get("user_phone")
 
-    if not user_id and not buyer_name and not buyer_phone:
+    if not user_id:
         return jsonify({"error": "Please log in to view your orders."}), 401
 
     results = []
@@ -7961,12 +8459,7 @@ def my_orders():
         with store.open(ORDERS_FILE, "r", newline="", encoding="utf-8") as f:
             reader = csv.DictReader(f)
             for row in reader:
-                matches_user = bool(user_id and row.get("buyer_user_id", "") == user_id)
-                matches_legacy = (
-                    not row.get("buyer_user_id", "") and buyer_name and buyer_phone and
-                    row.get("buyer_name") == buyer_name and row.get("buyer_phone") == buyer_phone
-                )
-                if matches_user or matches_legacy:
+                if buyer_owns_order(row):
                     results.append({
                         "order_id": row.get("order_id"),
                         "status": row.get("status"),
@@ -7990,11 +8483,27 @@ def my_orders():
 @app.route("/api/track_order")
 def track_order():
 
+    # Was public: anyone could read any order's status and delivery
+    # location by order ID or phone number.
+    if not session.get("user_id"):
+        return jsonify({"error": "Please log in to track orders."}), 401
+
     order_id = request.args.get("order_id")
     phone = request.args.get("phone")
     
     if not order_id and not phone:
         return jsonify({"error": "Provide order_id or phone"}), 400
+
+    role = str(session.get("role") or "").strip().lower()
+    own_stp_id = str(session.get("stp_id") or "").strip()
+
+    def visible(row):
+        if role in ADMIN_ROLES:
+            # approvals-only admins don't see orders (pentest PT-05)
+            return "orders" in admin_sections()
+        if role == "stp":
+            return bool(own_stp_id) and str(row.get("stp_id") or "").strip() == own_stp_id
+        return buyer_owns_order(row)
 
     results = []
 
@@ -8006,7 +8515,7 @@ def track_order():
                 if (
                     (order_id and row.get("order_id") == order_id) or
                     (phone and row.get("buyer_phone") == phone)
-                ):
+                ) and visible(row):
                     results.append({
                         "order_id": row.get("order_id"),
                         "status": row.get("status"),
@@ -8292,7 +8801,7 @@ def update_capacity():
     if denied:
         return denied
     try:
-        new_capacity = float(request.form["available_capacity_mld"])
+        new_capacity = security.finite_float(request.form["available_capacity_mld"], 0, 10_000)
         if new_capacity < 0:
             raise ValueError
     except (KeyError, TypeError, ValueError):
@@ -9926,7 +10435,7 @@ def api_tanker_route():
         try:
             if value in (None, ""):
                 return None
-            return float(value)
+            return security.finite_float(value, -180, 180)
         except (TypeError, ValueError):
             return None
 
@@ -9953,6 +10462,18 @@ def api_tanker_route():
                     order = row
                     break
 
+    # Only jobs offered or assigned to this operator: the delivery point is
+    # the buyer's location (pentest PT-06: any tanker could read any order's).
+    def mine(row):
+        me = str(session.get("tanker_operator_id") or "").strip()
+        return bool(me) and me in (
+            str(row.get("offered_operator_id") or "").strip(),
+            str(row.get("assigned_operator_id") or "").strip(),
+        )
+
+    if order is not None and not mine(order):
+        order = None
+
     transfer = None
     if request_type == "stp_transfer":
         ensure_stp_transfers_file()
@@ -9966,6 +10487,9 @@ def api_tanker_route():
                 if str(row.get("transfer_id") or "").strip() == order_id:
                     transfer = row
                     break
+
+    if transfer is not None and not mine(transfer):
+        transfer = None
 
     if start_lat is None or start_lon is None:
         if request_type == "stp_transfer" and transfer:
@@ -10187,6 +10711,14 @@ def upload_tanker_vehicle_document(
             400
         )
 
+    # Check the content too, not just the name: a real PDF starts with
+    # "%PDF-" (an XLSX/ZIP, XML or HTML file renamed to .pdf does not).
+    if not security.looks_like_pdf(uploaded_file.stream):
+        return (
+            "Only PDF documents are allowed.",
+            400
+        )
+
 
     # ==========================================
     # MAXIMUM FILE SIZE: 5 MB
@@ -10215,16 +10747,12 @@ def upload_tanker_vehicle_document(
 
     document_id = (
         "DOC-"
-        + uuid.uuid4().hex[:12].upper()
+        + secrets.token_hex(6).upper()
     )
 
-
-    stored_filename = (
-        f"{operator_id}_"
-        f"{vehicle_id}_"
-        f"{document_type}_"
-        f"{uuid.uuid4().hex[:8]}.pdf"
-    )
+    # A random name: nothing about the operator or vehicle, nothing
+    # guessable. The CSV row maps it back to its vehicle.
+    stored_filename = f"doc_{secrets.token_hex(16)}.pdf"
 
 
     stored_filename = secure_filename(
@@ -10516,6 +11044,13 @@ def safe_user_value(user, field_name, default=""):
     return str(value).strip()
 
 def ensure_stp_transfers_file():
+    """Runs under the cross-process data lock (re-entrant), so it is safe
+    from lock-free endpoints too (SECURITY pentest PT-10)."""
+    with security.data_lock():
+        return _ensure_stp_transfers_file_unlocked()
+
+
+def _ensure_stp_transfers_file_unlocked():
     """Create or update the STP-to-STP transfer request CSV schema."""
 
     # Create the file if it does not exist or is empty
@@ -10898,10 +11433,18 @@ def stp_register():
 @app.route("/api/stp_order_tracking/<order_id>")
 def stp_order_tracking(order_id):
     # Return one order for the STP operator tracking page.
-    if session.get("role") != "stp":
+    if session.get("role") != "stp" or not session.get("user_id"):
         return jsonify({"error": "Unauthorized"}), 403
 
+    # The plant is the one in the session, never a query parameter: with
+    # ?stp_id left out, any plant used to read any order.
+    own_stp_id = _session_stp_id()
+    if not own_stp_id:
+        return jsonify({"error": "No STP is assigned to this account."}), 403
     requested_stp_id = (request.args.get("stp_id") or "").strip()
+    if requested_stp_id and requested_stp_id != own_stp_id:
+        return jsonify({"error": "Order does not belong to this STP"}), 403
+    requested_stp_id = own_stp_id
 
     if not store.exists(ORDERS_FILE):
         return jsonify({"error": "Orders file not found"}), 404
@@ -10922,7 +11465,7 @@ def stp_order_tracking(order_id):
 
     return jsonify({"error": "Order not found"}), 404
 
-@app.route("/admin/stp/<registration_id>/status/<status>")
+@app.route("/admin/stp/<registration_id>/status/<status>", methods=["POST"])
 @admin_required("approvals")
 def update_stp_status(registration_id, status):
 
@@ -11264,13 +11807,9 @@ def reorder_order(order_id):
                     row.get("buyer_user_id", "") == user_id
                 )
 
-                matches_legacy = (
-                    not row.get("buyer_user_id", "")
-                    and buyer_name
-                    and buyer_phone
-                    and row.get("buyer_name") == buyer_name
-                    and row.get("buyer_phone") == buyer_phone
-                )
+                # Name + phone are user-chosen, so they never prove
+                # ownership.
+                matches_legacy = False
 
                 if not (
                     matches_user
@@ -11967,6 +12506,16 @@ def handle_transfer_request():
 
 
 
+CHAT_MESSAGE_MAX_LENGTH = 1000
+# The lookbehind starts a number only at its first digit, so a long run of
+# digits is scanned once (linear; the old pattern was quadratic).
+CHAT_QUANTITY = re.compile(r"(?<![\d.])(\d+(?:\.\d+)?)\s*(kld|kl|litres?|liters?)\b", re.IGNORECASE)
+CHAT_LOCATION_AFTER_STP = re.compile(
+    r"\b(?:to|for|near|around|at|in)\s+(.+)$",
+    re.IGNORECASE
+)
+
+
 @app.route("/api/chat", methods=["POST"])
 def chatbot():
     """
@@ -11998,6 +12547,9 @@ def chatbot():
         message = str(data.get("message") or "").strip()
         if not message:
             return jsonify({"reply": "Please type a question."}), 400
+
+        # Cap the text before any regex or fuzzy matching runs on it.
+        message = message[:CHAT_MESSAGE_MAX_LENGTH]
 
         text = re.sub(r"\s+", " ", message.lower()).strip()
 
@@ -12150,10 +12702,7 @@ def chatbot():
         # ---------------------------------------------------------
         requested_kld = None
 
-        quantity_match = re.search(
-            r"(\d+(?:\.\d+)?)\s*(kld|kl|litres?|liters?)\b",
-            text
-        )
+        quantity_match = CHAT_QUANTITY.search(text)
 
         if quantity_match:
             quantity_value = float(quantity_match.group(1))
@@ -12328,10 +12877,13 @@ def chatbot():
             mentioned_location = llm_location
 
             if not mentioned_location:
-                location_match = re.search(
-                    r"stp.*?\b(?:to|for|near|around|at|in)\s+(.+)$",
-                    text,
-                    re.IGNORECASE
+                # Same as r"stp.*?\b(?:to|for|...)\s+(.+)$" but linear:
+                # find the first "stp", then the first place word after it.
+                stp_at = text.find("stp")
+                location_match = (
+                    CHAT_LOCATION_AFTER_STP.search(text, stp_at + 3)
+                    if stp_at >= 0
+                    else None
                 )
 
                 if location_match:
@@ -12823,23 +13375,9 @@ def chatbot():
                             row.get("buyer_phone") or ""
                         ).strip()
 
-                        matches_user = (
-                            bool(user_id)
-                            and bool(row_user_id)
-                            and row_user_id == user_id
-                        )
-
-                        # Backward compatibility for orders created before
-                        # buyer_user_id was added.
-                        matches_legacy = (
-                            not row_user_id
-                            and bool(buyer_name)
-                            and bool(buyer_phone)
-                            and row_name == buyer_name
-                            and row_phone == buyer_phone
-                        )
-
-                        if matches_user or matches_legacy:
+                        # Only orders carrying this user's id; name + phone
+                        # never prove ownership.
+                        if buyer_owns_order(row):
                             orders.append(row)
 
             if requested_order_id:
@@ -13251,11 +13789,11 @@ def update_pricing():
         return denied
 
     try:
-        base_price = float(data.get("base_price_per_kld"))
-        peak = float(data.get("peak_incentive"))
-        off_peak = float(data.get("off_peak_incentive"))
-        sustainability = float(data.get("sustainability_credit"))
-        reliability = float(data.get("reliability_bonus"))
+        base_price = security.finite_float(data.get("base_price_per_kld"), 0, 100_000)
+        peak = security.finite_float(data.get("peak_incentive"), 0, 100_000)
+        off_peak = security.finite_float(data.get("off_peak_incentive"), 0, 100_000)
+        sustainability = security.finite_float(data.get("sustainability_credit"))
+        reliability = security.finite_float(data.get("reliability_bonus"))
 
         if base_price < 0 or peak < 0 or off_peak < 0:
             raise ValueError
@@ -14844,7 +15382,8 @@ def timeout_worker():
     while True:
 
         try:
-            process_expired_order_offers()
+            with security.data_lock():
+                process_expired_order_offers()
 
         except Exception as e:
             print(
@@ -14853,7 +15392,8 @@ def timeout_worker():
             )
 
         try:
-            process_expired_transfer_offers()
+            with security.data_lock():
+                process_expired_transfer_offers()
 
         except Exception as e:
             print(
@@ -14945,20 +15485,18 @@ def admin_remove_tanker_vehicle(operator_id, vehicle_id):
     removed, error = remove_tanker_vehicle(operator_id, vehicle_id)
 
     if error:
-        notice = {"fleet_error": error}
+        flash(error, "error")
     else:
-        notice = {
-            "fleet_notice": (
-                f"Removed {removed.get('registration_number') or vehicle_id} "
-                "from the fleet."
-            )
-        }
+        flash(
+            f"Removed {removed.get('registration_number') or vehicle_id} "
+            "from the fleet.",
+            "notice"
+        )
 
     return redirect(
         url_for(
             "admin_tanker_operator_details",
-            operator_id=operator_id,
-            **notice
+            operator_id=operator_id
         )
     )
 
@@ -15585,8 +16123,8 @@ def update_tanker_location():
     data = request.get_json(silent=True) or {}
 
     try:
-        latitude = float(data.get("latitude"))
-        longitude = float(data.get("longitude"))
+        latitude = security.finite_float(data.get("latitude"), -90, 90)
+        longitude = security.finite_float(data.get("longitude"), -180, 180)
     except (TypeError, ValueError):
         return jsonify({"success": False, "error": "Invalid coordinates"}), 400
 
@@ -15604,10 +16142,7 @@ def update_tanker_location():
     }
 
     try:
-        supabase.table(TANKER_LOCATIONS_TABLE).upsert(
-            payload,
-            on_conflict="tanker_operator_id"
-        ).execute()
+        save_tanker_location(payload)
     except Exception as e:
         print("Tanker location save failed:", e)
         return jsonify({"success": False, "error": "Unable to save location"}), 500
@@ -15627,21 +16162,14 @@ def latest_tanker_location():
         return jsonify({"success": True, "location": None})
 
     try:
-        response = (
-            supabase.table(TANKER_LOCATIONS_TABLE)
-            .select("*")
-            .eq("tanker_operator_id", tanker_operator_id)
-            .limit(1)
-            .execute()
-        )
-        rows = response.data or []
+        location = get_tanker_location(tanker_operator_id)
     except Exception as e:
-        print("Supabase tanker location fetch error:", e)
+        print("Tanker location fetch error:", e)
         return jsonify({"success": True, "location": None})
 
     return jsonify({
         "success": True,
-        "location": rows[0] if rows else None
+        "location": location
     })
 
 
