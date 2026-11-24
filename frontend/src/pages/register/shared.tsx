@@ -119,3 +119,19 @@ export const PHONE_RE = /^[6-9]\d{9}$/;
 // Linear: each domain label excludes dots, so there is nothing to backtrack over.
 export const EMAIL_RE = /^[^\s@]+@[^\s@.]+(?:\.[^\s@.]+)+$/;
 export const digits = (v: string) => v.replace(/\D/g, "");
+
+/** Required "I agree" tick for registrations; the server checks it too. */
+export function ConsentCheck({ checked, onChange, error, children }: {
+  checked: boolean; onChange: (v: boolean) => void; error?: string | boolean; children: ReactNode;
+}) {
+  const message = typeof error === "string" && error ? error : null;
+  return (
+    <div className="consent-row">
+      <label className="consent-check">
+        <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} aria-invalid={!!message} aria-describedby={message ? "consent-error" : undefined} />
+        <span>{children}</span>
+      </label>
+      {message && <span className="field-error" id="consent-error">{message}</span>}
+    </div>
+  );
+}

@@ -32,3 +32,16 @@ export function initials(name?: string): string {
     .map((p) => p[0]!.toUpperCase())
     .join("");
 }
+
+/** How the buyer pays the plant, as shown to people. "Cash on Delivery" is
+ *  the stored value for "pay on delivery" (UPI or cash); "Paid" only exists
+ *  on orders from the old demo card screen, which charged nothing. */
+export function paymentLabel(p?: string | null): string {
+  const s = String(p ?? "").trim().toLowerCase();
+  if (!s) return "";
+  if (s === "paid") return "Marked paid (demo, nothing charged)";
+  if (s.includes("bank")) return "Bank transfer after delivery";
+  if (s.includes("cash") || s.includes("cod")) return "Pay on delivery (UPI or cash)";
+  if (s === "pending") return "Payment method not chosen";
+  return String(p);
+}

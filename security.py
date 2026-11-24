@@ -267,7 +267,8 @@ def check_same_origin():
 
 # ---------------------------------------------------------------------------
 # Extra E: security headers
-# Allow-list built from every external resource the pages use: Google Fonts,
+# Allow-list built from every external resource the pages use (fonts are
+# self-hosted in static/fonts):
 # Leaflet / leaflet.heat (jsDelivr), Chart.js (cdnjs), OpenStreetMap tiles,
 # Nominatim geocoding and OSRM routing called from the browser.
 # Inline scripts run only with this request's nonce (Jinja pages) or a
@@ -279,8 +280,8 @@ def check_same_origin():
 CONTENT_SECURITY_POLICY = "; ".join([
     "default-src 'self'",
     "script-src 'self' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com",
-    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net",
-    "font-src 'self' data: https://fonts.gstatic.com",
+    "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net",
+    "font-src 'self' data:",
     "img-src 'self' data: blob: https://tile.openstreetmap.org https://*.tile.openstreetmap.org",
     "connect-src 'self' https://nominatim.openstreetmap.org https://router.project-osrm.org",
     "frame-src 'none'",

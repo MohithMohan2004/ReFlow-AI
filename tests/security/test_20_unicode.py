@@ -2,7 +2,7 @@
 create a second account or sign in as someone else."""
 import security
 
-BASE = dict(first_name="Big", last_name="Bird", mobile="9000012345", role="demand",
+BASE = dict(accept_terms="yes", first_name="Big", last_name="Bird", mobile="9000012345", role="demand",
             password="bird-password-1", confirm_password="bird-password-1")
 
 

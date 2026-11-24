@@ -4,7 +4,7 @@
     {% include "_theme.html" %}
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Invoice {{ info.order_id }} | ReFlow</title>
+    <title>Order summary {{ info.order_id }} | ReFlow</title>
     <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='brand-mark.svg') }}?v=blocks">
 
     <style>
@@ -199,33 +199,21 @@
         .sheet-head p { margin: 4px 0 0; font-size: 13.5px; color: var(--muted); line-height: 1.5; }
         .x { width: 32px; height: 32px; border: 0; border-radius: 9px; background: var(--surface-2); color: var(--muted); cursor: pointer; display: grid; place-items: center; flex: none; }
         .x:hover { background: var(--surface-3); color: var(--ink); }
-        .card-art {
-            position: relative; overflow: hidden; height: 150px; border-radius: 16px; padding: 18px; margin-bottom: 16px; color: #fff;
-            background: radial-gradient(80% 120% at 100% 0%, rgba(94,234,212,.45), transparent 60%), linear-gradient(135deg, #1463d6, #0b1a30);
-            display: flex; flex-direction: column; justify-content: space-between;
-        }
-        .card-art .chip { width: 34px; height: 25px; border-radius: 6px; background: linear-gradient(135deg, #f6d38a, #c9a050); }
-        .card-art .digits { font-size: 18px; letter-spacing: .12em; font-weight: 600; }
-        .card-art .lower { display: flex; justify-content: space-between; font-size: 11.5px; text-transform: uppercase; letter-spacing: .08em; opacity: .85; }
-        .f { display: grid; gap: 6px; margin-bottom: 12px; }
-        .f label { font-size: 12.5px; font-weight: 600; color: var(--ink-2); }
-        .f input { height: 42px; padding: 0 12px; border: 1px solid var(--line-strong); border-radius: 10px; font: inherit; font-size: 14px; }
-        .f input:focus { outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px rgba(20, 99, 214, .2); }
-        .f2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-        .sheet .err { display: none; margin: -2px 0 12px; font-size: 12.5px; color: var(--bad); }
-        .sheet .err.show { display: block; }
+        [hidden] { display: none !important; }
+        .consent { display: flex; gap: 10px; align-items: flex-start; padding: 12px; border: 1px solid var(--line); border-radius: 12px; font-size: 13px; line-height: 1.5; color: var(--ink-2); cursor: pointer; }
+        .consent input { width: 18px; height: 18px; margin: 1px 0 0; flex: none; accent-color: var(--brand); }
+        .consent a { color: var(--brand); font-weight: 600; }
         .confirm {
             width: 100%; height: 46px; border: 0; border-radius: 12px; cursor: pointer;
             display: inline-flex; align-items: center; justify-content: center; gap: 8px;
             font: inherit; font-size: 15px; font-weight: 600; color: #fff;
             background: linear-gradient(100deg, #1f5fe0, #1463d6 60%, #0f6fb5);
         }
-        .confirm.teal { background: linear-gradient(100deg, #0f8f84, #0d9488); }
+        .confirm.teal { background: #0f766e; }
         .confirm:disabled { opacity: .7; cursor: progress; }
         .confirm .spin { display: none; width: 16px; height: 16px; border-radius: 50%; border: 2px solid rgba(255,255,255,.5); border-top-color: #fff; animation: spin .7s linear infinite; }
         .confirm[data-busy="true"] .spin { display: block; }
         @keyframes spin { to { transform: rotate(360deg); } }
-        .fine { margin: 10px 0 0; text-align: center; font-size: 12px; color: var(--faint); }
         .cod-list { list-style: none; margin: 0 0 16px; padding: 0; display: grid; gap: 8px; font-size: 13.5px; color: var(--ink-2); }
         .cod-list li { display: flex; gap: 8px; }
         .cod-list svg.i { color: var(--teal); margin-top: 2px; }
@@ -261,9 +249,7 @@
         }
     </style>
 
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='fonts/fonts.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='design-system.css') }}">
 </head>
 
@@ -302,7 +288,7 @@
 
     <div class="crumbs">
         <div>
-            <h1>{{ "Review & confirm your booking" if info.is_draft else "Tax invoice" }}</h1>
+            <h1>{{ "Review & confirm your booking" if info.is_draft else "Order summary" }}</h1>
             <p>Order <span class="num">{{ info.order_id }}</span>{% if info.created_label %} · placed {{ info.created_label }}{% endif %}</p>
         </div>
     </div>
@@ -324,7 +310,7 @@
         </div>
     {% endif %}
 
-    <article class="doc" aria-label="Invoice">
+    <article class="doc" aria-label="Order summary">
 
         <div class="doc-head on-dark">
             <svg class="waves" viewBox="0 0 360 120" aria-hidden="true">
@@ -340,8 +326,8 @@
                 <small>Treated water marketplace · Bengaluru, Karnataka</small>
             </div>
             <div class="title">
-                <div class="kicker">{{ "Proforma invoice" if info.is_draft else "Tax invoice" }}</div>
-                <h2 class="num">INV-{{ info.order_id }}</h2>
+                <div class="kicker">{{ "Order summary · draft" if info.is_draft else "Order summary · not a tax invoice" }}</div>
+                <h2 class="num">{{ info.order_id }}</h2>
                 <p>{{ info.created_label or "Today" }}</p>
                 <span class="pill {{ status_tone }}">{{ "Awaiting confirmation" if info.is_draft else status }}</span>
             </div>
@@ -356,9 +342,8 @@
         <div class="doc-body">
 
             <div class="meta">
-                <div><div class="label">Invoice no.</div><div class="value num">INV-{{ info.order_id }}</div></div>
                 <div><div class="label">Order ID</div><div class="value num">{{ info.order_id }}</div></div>
-                <div><div class="label">Invoice date</div><div class="value">{{ info.created_label or "Today" }}</div></div>
+                <div><div class="label">Order date</div><div class="value">{{ info.created_label or "Today" }}</div></div>
                 <div><div class="label">Payment</div><div class="value">{{ "Not chosen yet" if info.is_draft else pay }}</div></div>
             </div>
 
@@ -376,7 +361,7 @@
                 <section class="party">
                     <div class="party-head">
                         <span class="ico blue"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg></span>
-                        <div><div class="label">Billed to</div><h3>{{ info.buyer_name or "Customer" }}</h3></div>
+                        <div><div class="label">Ordered by</div><h3>{{ info.buyer_name or "Customer" }}</h3></div>
                     </div>
                     {% if info.buyer_phone %}
                         <div class="row"><svg class="i" viewBox="0 0 24 24"><rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M11 18h2"/></svg><span class="num">{{ info.buyer_phone }}</span></div>
@@ -425,8 +410,8 @@
                 </div>
                 <div class="totals">
                     <div><span>Subtotal</span><span class="num">₹{{ info.subtotal }}</span></div>
-                    <div><span>CGST ({{ info.cgst_percent }}%)</span><span class="num">₹{{ info.cgst }}</span></div>
-                    <div><span>SGST ({{ info.sgst_percent }}%)</span><span class="num">₹{{ info.sgst }}</span></div>
+                    <div><span>CGST ({{ info.cgst_percent }}%, estimate)</span><span class="num">₹{{ info.cgst }}</span></div>
+                    <div><span>SGST ({{ info.sgst_percent }}%, estimate)</span><span class="num">₹{{ info.sgst }}</span></div>
                     <div class="grand"><span>Total</span><b class="num">₹{{ info.total }}</b></div>
                 </div>
             </div>
@@ -434,8 +419,8 @@
         </div>
 
         <footer class="doc-foot">
-            <span>Prices follow the plant's published rate card at the time the order was placed. All amounts in Indian rupees.</span>
-            <span>Generated by ReFlow</span>
+            <span>Order summary, not a tax invoice. Prices follow the plant's published rate card at the time the order was placed; GST shown is an estimate. The plant issues its own GST invoice if it is registered for GST. All amounts in Indian rupees.</span>
+            <span>Prepared by ReFlow (pilot)</span>
         </footer>
 
     </article>
@@ -457,40 +442,40 @@
                 <h3>{{ "Confirm & pay" if info.is_draft else "Payment due" }}</h3>
                 <p>{{ "Choose a payment method to place this order." if info.is_draft else "This order is waiting for payment." }}</p>
                 <div class="due"><span>Amount due</span><b class="num">₹{{ info.total }}</b></div>
-                <div class="pay-forms">
-                    <form method="POST" action="/pay_now" id="payForm">
-                        <input type="hidden" name="order_id" value="{{ info.order_id }}">
-                        <input type="hidden" name="amount" value="{{ info.total_plain }}">
-                        <button type="submit" class="pay-btn primary">
-                            <span class="ico"><svg class="i" viewBox="0 0 24 24"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/></svg></span>
-                            <span><strong>Pay now</strong><small>Card · instant confirmation</small></span>
-                            <svg class="i go" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg>
-                        </button>
-                    </form>
-                    <form method="POST" action="/confirm_cod" id="codForm">
-                        <input type="hidden" name="order_id" value="{{ info.order_id }}">
-                        <input type="hidden" name="amount" value="{{ info.total_plain }}">
-                        <button type="submit" class="pay-btn">
-                            <span class="ico teal"><svg class="i" viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/><path d="M6 12h.01M18 12h.01"/></svg></span>
-                            <span><strong>Cash on delivery</strong><small>Pay when the tanker arrives</small></span>
-                            <svg class="i go" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg>
-                        </button>
-                    </form>
-                </div>
-                <div class="secure"><svg class="i" viewBox="0 0 24 24"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>Demo checkout. No real money is charged.</div>
+                <form method="POST" action="/confirm_cod" id="orderForm" class="pay-forms">
+                    <input type="hidden" name="order_id" value="{{ info.order_id }}">
+                    <input type="hidden" name="amount" value="{{ info.total_plain }}">
+                    <input type="hidden" name="method" id="payMethod" value="delivery">
+                    <label class="consent">
+                        <input type="checkbox" name="accept_terms" value="yes" required>
+                        <span>I'll use this treated water only for non-drinking purposes, and I agree to the <a href="/terms" target="_blank" rel="noopener">Terms of Use</a> and the <a href="/refunds" target="_blank" rel="noopener">refund policy</a>. I have read the <a href="/privacy" target="_blank" rel="noopener">Privacy Policy</a>.</span>
+                    </label>
+                    <button type="submit" class="pay-btn primary" name="choice" value="delivery">
+                        <span class="ico"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/><path d="M6 12h.01M18 12h.01"/></svg></span>
+                        <span><strong>Pay on delivery</strong><small>UPI or cash to the tanker partner when the water arrives</small></span>
+                        <svg class="i go" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
+                    </button>
+                    <button type="submit" class="pay-btn" name="choice" value="bank_transfer">
+                        <span class="ico teal"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10h18"/><path d="M5 10v8M9.5 10v8M14.5 10v8M19 10v8"/><path d="M3 21h18"/><path d="m12 3 9 5H3z"/></svg></span>
+                        <span><strong>Bank transfer</strong><small>Pay the plant against its invoice after delivery</small></span>
+                        <svg class="i go" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
+                    </button>
+                </form>
+                <div class="secure"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>ReFlow doesn't take payments. You pay the plant directly, and ReFlow never asks you to pay into a ReFlow account.</div>
             {% elif pay|lower == "paid" %}
                 <h3>Payment</h3>
-                <p>Thanks, this invoice is settled.</p>
+                <p>This order was placed with ReFlow's former demo checkout.</p>
                 <div class="settled ok">
                     <span class="ico"><svg class="i" viewBox="0 0 24 24"><path d="m5 12 5 5 9-10"/></svg></span>
-                    <span><strong>Paid · ₹{{ info.total }}</strong><small>Paid online by card</small></span>
+                    <span><strong>Marked paid · ₹{{ info.total }}</strong><small>Placed with the old demo checkout; no money was charged</small></span>
                 </div>
             {% else %}
                 <h3>Payment</h3>
-                <p>{{ "Settled with the tanker partner on delivery." if status_l == "delivered" else "Keep this amount ready for the tanker partner." }}</p>
+                {% set bank = pay|lower == "bank transfer" %}
+                <p>{% if bank %}{{ "Pay the plant by bank transfer against its invoice." if status_l == "delivered" else "You'll pay the plant by bank transfer against its invoice after delivery." }}{% else %}{{ "Paid to the tanker partner on delivery (UPI or cash)." if status_l == "delivered" else "Keep this amount ready for the tanker partner (UPI or cash)." }}{% endif %}</p>
                 <div class="settled {{ 'ok' if status_l == 'delivered' else 'warn' }}">
                     <span class="ico"><svg class="i" viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/></svg></span>
-                    <span><strong>{{ pay }} · ₹{{ info.total }}</strong><small>{{ "Delivered" if status_l == "delivered" else "Due on delivery" }}</small></span>
+                    <span><strong>{{ "Bank transfer" if bank else "Pay on delivery" }} · ₹{{ info.total }}</strong><small>{% if bank %}{{ "Delivered · pay against the plant's invoice" if status_l == "delivered" else "Due after delivery" }}{% else %}{{ "Delivered" if status_l == "delivered" else "Due on delivery" }}{% endif %}</small></span>
                 </div>
             {% endif %}
         </section>
@@ -516,42 +501,23 @@
 </main>
 
 {% if needs_payment and not closed %}
-<div class="modal" id="payModal" aria-hidden="true">
-    <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="payTitle">
-        <div class="sheet-head">
-            <div><h3 id="payTitle">Pay ₹{{ info.total }}</h3><p>Demo checkout: any card details work and nothing is charged.</p></div>
-            <button type="button" class="x" data-close aria-label="Close"><svg class="i" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
-        </div>
-        <div class="card-art" aria-hidden="true">
-            <div class="chip"></div>
-            <div class="digits num" id="artNumber">•••• •••• •••• ••••</div>
-            <div class="lower"><span id="artName">Card holder</span><span id="artExpiry">MM/YY</span></div>
-        </div>
-        <div class="f"><label for="cardNumber">Card number</label><input id="cardNumber" inputmode="numeric" autocomplete="cc-number" maxlength="19" placeholder="1234 5678 9012 3456"></div>
-        <div class="f"><label for="cardName">Name on card</label><input id="cardName" autocomplete="cc-name" placeholder="As printed on the card"></div>
-        <div class="f2">
-            <div class="f"><label for="cardExpiry">Expiry</label><input id="cardExpiry" inputmode="numeric" autocomplete="cc-exp" maxlength="5" placeholder="MM/YY"></div>
-            <div class="f"><label for="cardCvv">CVV</label><input id="cardCvv" type="password" inputmode="numeric" autocomplete="cc-csc" maxlength="4" placeholder="•••"></div>
-        </div>
-        <p class="err" id="payErr">Fill in all card details to continue.</p>
-        <button type="button" class="confirm" id="confirmPay"><span class="spin" aria-hidden="true"></span><span class="txt">Pay ₹{{ info.total }} &amp; book</span></button>
-        <p class="fine">Demo payment only. No real money will be charged.</p>
-    </div>
-</div>
-
 <div class="modal" id="codModal" aria-hidden="true">
     <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="codTitle">
         <div class="sheet-head">
-            <div><h3 id="codTitle">Confirm cash on delivery</h3><p>Your order is placed now and you pay when the water arrives.</p></div>
-            <button type="button" class="x" data-close aria-label="Close"><svg class="i" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+            <div><h3 id="codTitle" data-for="delivery">Confirm pay on delivery</h3><h3 id="codTitleBank" data-for="bank_transfer" hidden>Confirm bank transfer</h3>
+                <p data-for="delivery">Your order is placed now and you pay when the water arrives.</p>
+                <p data-for="bank_transfer" hidden>Your order is placed now and you pay the plant after delivery.</p></div>
+            <button type="button" class="x" data-close aria-label="Close"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
         </div>
-        <div class="due"><span>Pay on delivery</span><b class="num">₹{{ info.total }}</b></div>
+        <div class="due"><span>Amount</span><b class="num">₹{{ info.total }}</b></div>
         <ul class="cod-list">
-            <li><svg class="i" viewBox="0 0 24 24"><path d="m5 12 5 5 9-10"/></svg>{{ info.stp_name or "The plant" }} receives your request right away</li>
-            <li><svg class="i" viewBox="0 0 24 24"><path d="m5 12 5 5 9-10"/></svg>A tanker partner is assigned once the plant accepts</li>
-            <li><svg class="i" viewBox="0 0 24 24"><path d="m5 12 5 5 9-10"/></svg>Pay the driver in cash or UPI at delivery</li>
+            <li><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 5 5 9-10"/></svg>{{ info.stp_name or "The plant" }} receives your request right away</li>
+            <li><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 5 5 9-10"/></svg>A tanker partner is assigned once the plant accepts</li>
+            <li data-for="delivery"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 5 5 9-10"/></svg>Pay the tanker partner by UPI or cash when the water arrives</li>
+            <li data-for="bank_transfer" hidden><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 5 5 9-10"/></svg>The plant sends its invoice with its bank details; pay within its payment terms</li>
+            <li><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 5 5 9-10"/></svg>Nothing is owed if the water isn't delivered</li>
         </ul>
-        <button type="button" class="confirm teal" id="confirmCod"><span class="spin" aria-hidden="true"></span><span class="txt">Confirm &amp; book order</span></button>
+        <button type="button" class="confirm teal" id="confirmCod"><span class="spin" aria-hidden="true"></span><span class="txt">Place order</span></button>
     </div>
 </div>
 {% endif %}
@@ -572,18 +538,16 @@ document.querySelectorAll("[data-action=print]").forEach(function (b) { b.addEve
         })
         .catch(function () {});
 
-    var payForm = document.getElementById("payForm");
-    var codForm = document.getElementById("codForm");
-    var payModal = document.getElementById("payModal");
+    var orderForm = document.getElementById("orderForm");
     var codModal = document.getElementById("codModal");
-    if (!payForm || !codForm) return;
-
+    if (!orderForm || !codModal) return;
+    var methodInput = document.getElementById("payMethod");
     var lastFocus = null;
     function open(modal) {
         lastFocus = document.activeElement;
         modal.classList.add("show");
         modal.setAttribute("aria-hidden", "false");
-        var first = modal.querySelector("input, .confirm");
+        var first = modal.querySelector(".confirm");
         if (first) first.focus();
     }
     function close(modal) {
@@ -594,51 +558,24 @@ document.querySelectorAll("[data-action=print]").forEach(function (b) { b.addEve
         modal.setAttribute("aria-hidden", "true");
         if (lastFocus) lastFocus.focus();
     }
-
-    payForm.addEventListener("submit", function (e) { e.preventDefault(); open(payModal); });
-    codForm.addEventListener("submit", function (e) { e.preventDefault(); open(codModal); });
-
-    [payModal, codModal].forEach(function (modal) {
-        modal.addEventListener("click", function (e) { if (e.target === modal) close(modal); });
-        modal.querySelectorAll("[data-close]").forEach(function (b) { b.addEventListener("click", function () { close(modal); }); });
+    // The browser has already checked the required consent box when
+    // "submit" fires; show the matching confirmation first.
+    orderForm.addEventListener("submit", function (e) {
+        e.preventDefault();
+        var choice = e.submitter && e.submitter.value === "bank_transfer" ? "bank_transfer" : "delivery";
+        methodInput.value = choice;
+        codModal.querySelectorAll("[data-for]").forEach(function (el) { el.hidden = el.getAttribute("data-for") !== choice; });
+        codModal.querySelector(".sheet").setAttribute("aria-labelledby", choice === "bank_transfer" ? "codTitleBank" : "codTitle");
+        open(codModal);
     });
-    document.addEventListener("keydown", function (e) {
-        if (e.key === "Escape") { close(payModal); close(codModal); }
-    });
-
-    function busy(button, text) {
-        button.disabled = true;
-        button.setAttribute("data-busy", "true");
-        button.querySelector(".txt").textContent = text;
-    }
-
-    // Card fields: format as you type and mirror onto the card graphic
-    var num = document.getElementById("cardNumber"), name = document.getElementById("cardName");
-    var exp = document.getElementById("cardExpiry"), cvv = document.getElementById("cardCvv");
-    num.addEventListener("input", function () {
-        var d = num.value.replace(/\D/g, "").slice(0, 16);
-        num.value = d.replace(/(.{4})/g, "$1 ").trim();
-        var padded = (d + "################").slice(0, 16).replace(/#/g, "•");
-        document.getElementById("artNumber").textContent = padded.replace(/(.{4})/g, "$1 ").trim();
-    });
-    name.addEventListener("input", function () { document.getElementById("artName").textContent = name.value.trim() || "Card holder"; });
-    exp.addEventListener("input", function () {
-        var d = exp.value.replace(/\D/g, "").slice(0, 4);
-        exp.value = d.length > 2 ? d.slice(0, 2) + "/" + d.slice(2) : d;
-        document.getElementById("artExpiry").textContent = exp.value || "MM/YY";
-    });
-    cvv.addEventListener("input", function () { cvv.value = cvv.value.replace(/\D/g, "").slice(0, 4); });
-
-    document.getElementById("confirmPay").addEventListener("click", function () {
-        var ok = num.value.replace(/\s/g, "").length >= 12 && name.value.trim() && /^\d{2}\/\d{2}$/.test(exp.value) && cvv.value.length >= 3;
-        document.getElementById("payErr").classList.toggle("show", !ok);
-        if (!ok) return;
-        busy(this, "Processing payment…");
-        setTimeout(function () { payForm.submit(); }, 700);
-    });
+    codModal.addEventListener("click", function (e) { if (e.target === codModal) close(codModal); });
+    codModal.querySelectorAll("[data-close]").forEach(function (b) { b.addEventListener("click", function () { close(codModal); }); });
+    document.addEventListener("keydown", function (e) { if (e.key === "Escape") close(codModal); });
     document.getElementById("confirmCod").addEventListener("click", function () {
-        busy(this, "Booking your order…");
-        setTimeout(function () { codForm.submit(); }, 400);
+        this.disabled = true;
+        this.setAttribute("data-busy", "true");
+        this.querySelector(".txt").textContent = "Placing your order…";
+        orderForm.submit();
     });
 })();
 </script>

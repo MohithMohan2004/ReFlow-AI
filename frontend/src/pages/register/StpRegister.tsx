@@ -4,7 +4,7 @@ import { LocationPicker, type PickedPoint } from "../../components/LocationPicke
 import { Notice, Spinner } from "../../components/ui";
 import { submitForm } from "../../lib/api";
 import { GRADES } from "../../lib/grades";
-import { Checklist, digits, EMAIL_RE, Field, PHONE_RE, RegisterHero, RegisterShell, Section, SuccessView } from "./shared";
+import { Checklist, digits, EMAIL_RE, Field, PHONE_RE, RegisterHero, RegisterShell, Section, SuccessView, ConsentCheck } from "./shared";
 
 
 export default function StpRegister() {
@@ -15,6 +15,7 @@ export default function StpRegister() {
   });
   const [loc, setLoc] = useState<PickedPoint | null>(null);
   const [tried, setTried] = useState(false);
+  const [agreed, setAgreed] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<{ registration_id: string; stp_name: string } | null>(null);
@@ -33,6 +34,7 @@ export default function StpRegister() {
     current_load_kld: (f.current_load_kld === "" || load < 0) ? "Enter the current load (0 or more)." : load > total ? "Load can't exceed capacity." : false,
     treatment_cost_per_kl: f.treatment_cost_per_kl === "" && "Enter the treatment cost.",
     location: !loc && "Place the plant on the map.",
+    consent: !agreed && "Tick the box to confirm and agree before submitting.",
   };
   const valid = Object.values(errors).every((e) => !e);
   const show = (k: keyof typeof errors) => tried && errors[k];
@@ -47,6 +49,7 @@ export default function StpRegister() {
     }
     const body = new FormData();
     Object.entries(f).forEach(([k, v]) => body.append(k, v.trim()));
+    body.append("accept_terms", agreed ? "yes" : "");
     body.append("latitude", String(loc!.lat));
     body.append("longitude", String(loc!.lon));
     setSaving(true);
@@ -130,6 +133,9 @@ export default function StpRegister() {
             {show("location") && <span className="field-error">{errors.location}</span>}
           </Section>
 
+          <ConsentCheck checked={agreed} onChange={setAgreed} error={show("consent")}>
+            I operate this plant or am authorised by its owner, the details above are accurate, and the plant holds the consents needed to supply treated water. I agree to the <a href="/terms" target="_blank" rel="noopener">Terms of Use</a> and have read the <a href="/privacy" target="_blank" rel="noopener">Privacy Policy</a>.
+          </ConsentCheck>
           {error && <div style={{ padding: "0 24px" }}><Notice tone="danger">{error}</Notice></div>}
           <footer className="reg-foot">
             <span className="muted"><ShieldCheck size={14} /> Details are reviewed before the plant goes live.</span>

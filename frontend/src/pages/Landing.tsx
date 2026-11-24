@@ -1,4 +1,6 @@
 import { own } from "../lib/lookup";
+import { OPERATOR } from "../lib/legal";
+import { LegalFooter } from "../components/LegalFooter";
 import { useEffect, useMemo } from "react";
 import { useLocation } from "react-router-dom";
 import { Marker, Popup } from "react-leaflet";
@@ -83,11 +85,11 @@ export default function Landing() {
           </div>
 
           <div className="hero-copy">
-            <span className="hero-pill"><span className="live-dot" /> Live across Bengaluru</span>
+            <span className="hero-pill"><span className="live-dot" /> Pilot in Bengaluru</span>
             <h1 id="hero-title">Treated wastewater, <span className="grad-text">routed where it&rsquo;s needed.</span></h1>
             <p className="hero-lede">
-              ReFlow matches each demand site with the nearest treatment plant that has the capacity and
-              quality it needs, then dispatches the tanker that delivers it.
+              ReFlow matches each demand site with a nearby treatment plant that lists the capacity and
+              quality it needs, then offers the delivery to a tanker partner.
             </p>
             <div className="hero-actions">
               <a className="btn btn-lg btn-primary" href={dashboard ?? "/login"}>
@@ -118,12 +120,12 @@ export default function Landing() {
               </MapFrame>
               <div className="float-chip float-top">
                 <span className="live-dot" />
-                <span><b className="num">{loading ? "—" : located.length}</b> plants live</span>
+                <span><b className="num">{loading ? "—" : located.length}</b> plants on the map</span>
               </div>
               <div className="float-card float-bottom">
                 <span className="float-icon"><Droplets size={16} /></span>
                 <div>
-                  <span className="float-label">Available today</span>
+                  <span className="float-label">Listed capacity available</span>
                   <strong className="num">{loading ? "—" : num(totals.avail)} <small>KLD</small></strong>
                   <span className="float-bar" aria-hidden="true"><span style={{ width: `${totals.pct}%` }} /></span>
                 </div>
@@ -141,10 +143,14 @@ export default function Landing() {
 
         {/* LIVE FIGURES */}
         <section className="figures" aria-label="Network figures">
-          <Figure tone="blue" icon={Factory} label="Treatment plants" value={loading ? null : num(totals.count)} hint="Registered on the network" />
+          <Figure tone="blue" icon={Factory} label="Treatment plants" value={loading ? null : num(totals.count)} hint="Listed on the map" />
           <Figure tone="teal" icon={Gauge} label="Treatment capacity" value={loading ? null : num(totals.total)} unit="KLD" hint="Combined daily capacity" />
-          <Figure tone="violet" icon={Droplets} label="Available today" value={loading ? null : num(totals.avail)} unit="KLD" hint={`${Math.round(totals.pct)}% of capacity unallocated`} bar={totals.pct} />
+          <Figure tone="violet" icon={Droplets} label="Listed as available" value={loading ? null : num(totals.avail)} unit="KLD" hint={`${Math.round(totals.pct)}% of listed capacity`} bar={totals.pct} />
         </section>
+        <p className="figures-note">
+          Pilot figures. Plant locations and capacities come from public records and from plants on ReFlow, are
+          indicative, and don&rsquo;t mean a plant has joined ReFlow or will accept an order.
+        </p>
 
         {/* HOW IT WORKS */}
         <section id="how-it-works" className="block" aria-labelledby="how-title">
@@ -153,12 +159,12 @@ export default function Landing() {
               <span className="eyebrow">How it works</span>
               <h2 id="how-title">From treatment plant to site in four steps</h2>
             </div>
-            <p>Every request runs through the same pipeline, so supply decisions stay consistent and explainable.</p>
+            <p>Every request runs through the same steps, so you can see why a plant was suggested.</p>
           </header>
           <ol className="steps">
             <Step n={1} tone="sky" icon={ScanSearch} title="Search">Enter the delivery point, quantity, quality grade and water type.</Step>
-            <Step n={2} tone="teal" icon={ChartLine} title="Match">Plants are ranked on distance, live capacity and forecast demand.</Step>
-            <Step n={3} tone="amber" icon={Truck} title="Dispatch">The nearest available tanker partner is offered the pickup.</Step>
+            <Step n={2} tone="teal" icon={ChartLine} title="Match">Plants with enough listed capacity, the right grade and water type are sorted by road distance.</Step>
+            <Step n={3} tone="amber" icon={Truck} title="Dispatch">Once the plant accepts, a nearby tanker partner is offered the pickup.</Step>
             <Step n={4} tone="violet" icon={Route} title="Track">Follow the tanker live until the delivery is confirmed.</Step>
           </ol>
         </section>
@@ -176,7 +182,7 @@ export default function Landing() {
               Find treated water by location, quantity and quality, place an order and track the delivery.
             </Role>
             <Role tone="teal" icon={Building2} title="Plant operators" href="/stp/register" cta="Register a plant" art="plant">
-              Publish capacity and pricing, accept incoming orders and report OCEMS readings.
+              Publish capacity and pricing, accept incoming orders and connect your OCEMS feed.
             </Role>
             <Role tone="violet" icon={Truck} title="Tanker partners" href="/tanker/register" cta="Become a partner" art="truck">
               Receive pickups near you, follow the route and log every trip.
@@ -192,7 +198,7 @@ export default function Landing() {
           </svg>
           <div className="cta-copy">
             <h2 id="cta-title">Ready to put treated water to work?</h2>
-            <p>Every kilolitre delivered from a treatment plant is a kilolitre of fresh water left in the city&rsquo;s reserves.</p>
+            <p>Using treated water for non-drinking needs such as construction, landscaping and cooling can reduce the demand on fresh water.</p>
           </div>
           <div className="cta-actions">
             <a className="btn btn-lg btn-light" href={dashboard ?? "/signup"}>{dashboard ? "Open dashboard" : "Create an account"} <ArrowRight /></a>
@@ -204,37 +210,38 @@ export default function Landing() {
         <section className="about-grid block">
           <article id="about" className="card about" aria-labelledby="about-title">
             <span className="eyebrow">About</span>
-            <h2 id="about-title">About the project</h2>
+            <h2 id="about-title">About ReFlow</h2>
             <p>
-              The project routes treated wastewater from urban sources such as industries, apartments and commercial
-              buildings to nearby treatment plants based on distance, treatment capacity and demand.
+              ReFlow is a pilot run by a student project team in Bengaluru. It connects sites that need water for
+              non-drinking uses with sewage treatment plants that have treated water to spare, and with the tanker
+              partners who carry it.
             </p>
             <p>
-              Machine learning and geospatial analysis reduce transport costs, improve treatment efficiency and support
-              sustainable, water-positive city development.
+              It uses road distances to suggest plants and tankers, and gives plants a demand forecast. The pilot is a
+              working prototype: suggestions, forecasts and quality figures are indicative.
+            </p>
+            <p className="about-note">
+              Treated water from ReFlow is not for drinking, cooking or bathing.
             </p>
           </article>
           <article id="contact" className="card contact" aria-labelledby="contact-title">
             <span className="eyebrow">Contact</span>
             <h2 id="contact-title">Talk to the team</h2>
-            <p>For project queries, collaboration or technical discussions, reach the project team directly.</p>
+            <p>For questions, privacy requests, complaints or collaboration, write to the project team.</p>
             <dl className="contact-list">
               <div>
                 <dt><span className="contact-icon" data-tone="sky"><Mail size={14} /></span> Email</dt>
                 <dd><a href="mailto:reflow.circularity@gmail.com">reflow.circularity@gmail.com</a></dd>
               </div>
               <div>
-                <dt><span className="contact-icon" data-tone="teal"><Building2 size={14} /></span> Institution</dt>
-                <dd>Dayananda Sagar University</dd>
+                <dt><span className="contact-icon" data-tone="teal"><Building2 size={14} /></span> Run by</dt>
+                <dd>ReFlow student project team, {OPERATOR.city}</dd>
               </div>
             </dl>
           </article>
         </section>
 
-        <footer className="landing-foot">
-          <span>&copy; {new Date().getFullYear()} ReFlow</span>
-          <span>Wastewater Routing Optimization System</span>
-        </footer>
+        <LegalFooter />
       </main>
     </AppShell>
   );

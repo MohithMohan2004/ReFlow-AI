@@ -2,7 +2,7 @@
 import pytest
 
 ORIGIN = {"Origin": "http://localhost"}
-SIGNUP = dict(first_name="Mallory", last_name="M", mobile="9000012345", username="mallory", role="stp",
+SIGNUP = dict(accept_terms="yes", first_name="Mallory", last_name="M", mobile="9000012345", username="mallory", role="stp",
               stp_id="PSTP001", password="plant-pass-1", confirm_password="plant-pass-1")
 ADMIN = dict(user_id="adm-1", role="admin", user_email="admin@example.com")
 

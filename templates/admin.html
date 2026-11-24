@@ -263,9 +263,7 @@
         }
     </style>
 
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='fonts/fonts.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='design-system.css') }}">
 </head>
 
@@ -781,8 +779,8 @@
                 <section class="card">
                     <div class="card-head"><div><h2>Refund policy</h2><p>Applied automatically when a tanker reports it can't deliver</p></div></div>
                     <ul class="policy">
-                        <li><b>Paid online:</b> the buyer gets a full refund of the invoice total to the original payment method, whatever caused the failure. It shows as <span class="pill warn">Refund pending</span> until you mark it refunded here.</li>
-                        <li><b>Cash on delivery:</b> nothing was collected, so the order closes as <span class="pill info">Not charged</span>.</li>
+                        <li><b>ReFlow takes no payments.</b> Buyers pay the plant on delivery (UPI or cash) or by bank transfer after delivery, so a failed delivery closes as <span class="pill info">Not charged</span>. If a buyer had already paid the plant, the plant refunds them within 7 working days (Refunds &amp; Cancellations policy).</li>
+                        <li>Older orders still marked <span class="pill warn">Refund pending</span> came from the former demo card screen, which charged nothing; mark them refunded here to close them.</li>
                         <li>The order closes as <span class="pill bad">Delivery failed</span> for the buyer, the plant and the tanker, and the buyer can reorder in one tap.</li>
                         <li><b>Plant-to-plant transfers</b> carry no payment. The water the source plant reserved goes back to its free capacity, so the plants can arrange the transfer again.</li>
                     </ul>

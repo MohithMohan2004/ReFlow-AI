@@ -20,7 +20,7 @@ import { Empty, Notice, Segmented, SkeletonRows, Spinner, Stat, StatusBadge } fr
 import { getJSON, postForm, postJSON } from "../lib/api";
 import { useAsync } from "../lib/useAsync";
 import { useToast } from "../lib/toast";
-import { num, when } from "../lib/format";
+import { num, when, paymentLabel } from "../lib/format";
 import { applyFilter, bucketOf, BUCKET_COLOR, filterOptions, type OrderFilter } from "../lib/orders";
 import { toPoint, useRoute } from "../lib/route";
 import type { OcemsReading, Stp } from "../lib/types";
@@ -189,7 +189,7 @@ export default function Supply() {
                   <div className="panel-meta">
                     <span>{focusedOrder?.quality_required || focusedTransfer?.quality || "Any"} grade</span>
                     <span>{when(focusedOrder?.created_at ?? focusedTransfer?.requested_at)}</span>
-                    {focusedOrder?.payment_status && <span>{focusedOrder.payment_status}</span>}
+                    {focusedOrder?.payment_status && <span>{paymentLabel(focusedOrder.payment_status)}</span>}
                   </div>
                   {focusedOrder?.buyer_name && (
                     <div className="req-buyer">
@@ -302,7 +302,7 @@ export default function Supply() {
                             <div className="row wrap" style={{ gap: 8 }}>
                               <strong className="num">{d.request_id}</strong>
                               <StatusBadge status={d.status} />
-                              {d.payment_status && <span className="muted req-meta">{d.payment_status}</span>}
+                              {d.payment_status && <span className="muted req-meta">{paymentLabel(d.payment_status)}</span>}
                             </div>
                             <p className="req-site">{d.site_name}</p>
                             <div className="req-facts">

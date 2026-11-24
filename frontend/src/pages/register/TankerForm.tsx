@@ -3,7 +3,7 @@ import { ArrowRight, Building2, Minus, Plus, ShieldCheck, Truck } from "lucide-r
 import { LocationPicker, type PickedPoint } from "../../components/LocationPicker";
 import { Notice, Spinner } from "../../components/ui";
 import { submitForm } from "../../lib/api";
-import { Checklist, digits, EMAIL_RE, Field, PHONE_RE, RegisterHero, RegisterShell, Section, SuccessView } from "./shared";
+import { Checklist, digits, EMAIL_RE, Field, PHONE_RE, RegisterHero, RegisterShell, Section, SuccessView, ConsentCheck } from "./shared";
 
 type Variant = "independent" | "contracted";
 interface Vehicle { reg: string; cap: string; model: string }
@@ -24,6 +24,7 @@ export default function TankerForm({ variant }: { variant: Variant }) {
   const [loc, setLoc] = useState<PickedPoint | null>(null);
   const [fleet, setFleet] = useState<Vehicle[]>([blank()]);
   const [tried, setTried] = useState(false);
+  const [agreed, setAgreed] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<{ operator_id: string; operator_type: string } | null>(null);
@@ -52,6 +53,7 @@ export default function TankerForm({ variant }: { variant: Variant }) {
     contract_end: contracted && (!f.contract_end ? "Choose an end date." : f.contract_start && f.contract_end < f.contract_start ? "End date is before the start date." : false),
     location: !loc && "Place your base on the map.",
     fleet: vErr.some((e) => e.reg || e.cap || e.model) && "Complete every vehicle.",
+    consent: !agreed && "Tick the box to confirm and agree before submitting.",
   };
   const valid = Object.values(errors).every((e) => !e);
   const show = (k: keyof typeof errors) => tried && errors[k];
@@ -68,6 +70,7 @@ export default function TankerForm({ variant }: { variant: Variant }) {
     body.append("operator_name", f.operator_name.trim());
     body.append("phone", f.phone);
     body.append("email", f.email.trim());
+    body.append("accept_terms", agreed ? "yes" : "");
     body.append("latitude", String(loc!.lat));
     body.append("longitude", String(loc!.lon));
     body.append("operational_tankers", String(fleet.length));
@@ -205,6 +208,9 @@ export default function TankerForm({ variant }: { variant: Variant }) {
             </div>
           </Section>
 
+          <ConsentCheck checked={agreed} onChange={setAgreed} error={show("consent")}>
+            The details above are accurate and every vehicle has valid registration, insurance, PUC and permits. I agree to the <a href="/terms" target="_blank" rel="noopener">Terms of Use</a> and have read the <a href="/privacy" target="_blank" rel="noopener">Privacy Policy</a>.
+          </ConsentCheck>
           {error && <div style={{ padding: "0 24px" }}><Notice tone="danger">{error}</Notice></div>}
           <footer className="reg-foot">
             <span className="muted"><ShieldCheck size={14} /> Applications are verified before offers start.</span>

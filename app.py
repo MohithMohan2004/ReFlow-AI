@@ -2085,18 +2085,14 @@ def refund_terms_for(order):
     """ReFlow refund policy for an order the tanker could not deliver.
 
     The buyer never pays for water that did not arrive, whatever caused
-    the failure:
-    - Paid online: 100% of the invoice total goes back to the original
-      payment method. It stays "Refund pending" until an admin marks
-      it refunded.
-    - Cash on delivery (or not paid yet): nothing was collected, so
-      nothing is charged.
+    the failure. ReFlow takes no payments: buyers pay the plant on delivery
+    or by bank transfer against the plant's invoice after delivery, so a
+    failed delivery means nothing is owed and nothing was collected.
+    ("Paid" orders came from the old demo card screen, which charged
+    nothing, so they are not charged either.)
 
     Returns (refund_status, refund_amount_text).
     """
-    paid = str(order.get("payment_status") or "").strip().lower() == "paid"
-    if paid:
-        return REFUND_PENDING, order_invoice_total(order) or ""
     return REFUND_NOT_CHARGED, "0.00"
 
 
@@ -2712,6 +2708,99 @@ def serve_spa():
         )
     response = send_file(SPA_INDEX)
     response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
+# =========================================================
+# LEGAL PAGES AND CONSENT
+# Privacy policy, terms, cookie, refund and accessibility pages are React
+# pages (frontend/src/pages/Legal.tsx). Signing up, registering a plant or
+# tanker fleet and placing an order need an explicit "I agree" tick, which
+# is checked here (not only in the browser) and recorded with the version
+# of the documents that was accepted.
+# =========================================================
+
+# Change this date whenever the privacy policy or terms change materially,
+# together with LEGAL_VERSION in frontend/src/lib/legal.ts.
+LEGAL_VERSION = "2026-11-24"
+
+CONSENT_LOG_FILE = os.path.join(DATABASE_DIR, "consent_log.csv")
+CONSENT_FIELDS = ["recorded_at", "kind", "subject", "version"]
+
+TERMS_REQUIRED_ENDPOINTS = {
+    "api_signup": "signup",
+    "stp_register": "plant_registration",
+    "tanker_register_contracted": "tanker_registration",
+    "tanker_register_independent": "tanker_registration",
+    "confirm_cod": "order",
+}
+
+TERMS_REQUIRED_MESSAGE = (
+    "Please confirm that you agree to the Terms of Use and have read the Privacy Policy."
+)
+
+
+LEGAL_PAGES = ("/privacy", "/terms", "/cookies", "/refunds", "/accessibility")
+
+
+def legal_page():
+    return serve_spa()
+
+
+for _legal_path in LEGAL_PAGES:
+    app.add_url_rule(_legal_path, endpoint="legal_page" + _legal_path.replace("/", "_"), view_func=legal_page)
+
+
+def terms_accepted(source=None):
+    """True when the request carries an explicit acceptance tick."""
+    if source is None:
+        data = request.get_json(silent=True) if request.is_json else None
+        source = data if isinstance(data, dict) else request.form
+    value = source.get("accept_terms")
+    return value is True or str(value or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def record_consent(kind, subject):
+    """Append one acceptance to the consent log (who, what, which version)."""
+    row = {
+        "recorded_at": datetime.now(ocems_api.IST).strftime("%Y-%m-%d %H:%M:%S"),
+        "kind": kind,
+        "subject": str(subject or "")[:254],
+        "version": LEGAL_VERSION,
+    }
+    try:
+        with security.data_lock():
+            exists = store.exists(CONSENT_LOG_FILE) and store.getsize(CONSENT_LOG_FILE) > 0
+            with store.open(CONSENT_LOG_FILE, "a", newline="", encoding="utf-8") as f:
+                writer = csv.DictWriter(f, fieldnames=CONSENT_FIELDS)
+                if not exists:
+                    writer.writeheader()
+                writer.writerow(row)
+    except Exception as e:
+        print("CONSENT LOG ERROR:", type(e).__name__, e)
+
+
+@app.before_request
+def require_terms_acceptance():
+    if request.method != "POST" or request.endpoint not in TERMS_REQUIRED_ENDPOINTS:
+        return None
+    if terms_accepted():
+        return None
+    if request.endpoint == "confirm_cod":
+        return TERMS_REQUIRED_MESSAGE, 400
+    return jsonify({"success": False, "error": TERMS_REQUIRED_MESSAGE, "message": TERMS_REQUIRED_MESSAGE}), 400
+
+
+@app.after_request
+def log_terms_acceptance(response):
+    kind = TERMS_REQUIRED_ENDPOINTS.get(request.endpoint or "")
+    if kind and request.method == "POST" and response.status_code < 400:
+        data = request.get_json(silent=True) if request.is_json else None
+        source = data if isinstance(data, dict) else request.form
+        subject = session.get("user_id") or source.get("email") or source.get("phone") or ""
+        if kind == "order" and source.get("order_id"):
+            subject = f"{session.get('user_id') or ''}:{source.get('order_id')}"
+        record_consent(kind, subject)
     return response
 
 
@@ -3543,6 +3632,14 @@ def signup():
             signup_error="Please select a valid account type."
         )
 
+    if not terms_accepted(request.form):
+
+        return render_template(
+            "signup.html",
+            stps=stps,
+            signup_error=TERMS_REQUIRED_MESSAGE
+        )
+
     # =========================================================
     # PASSWORD VALIDATION
     # =========================================================
@@ -3828,7 +3925,11 @@ def signup():
                     tanker_operator_id
                     if role == "tanker"
                     else ""
-                )
+                ),
+
+            # Which version of the terms / privacy policy was accepted.
+            "terms_version": LEGAL_VERSION,
+            "terms_accepted_at": datetime.now(ocems_api.IST).strftime("%Y-%m-%d %H:%M:%S"),
         }
 
         print("")
@@ -3883,6 +3984,8 @@ def signup():
         print("USER ID:", response.user.id)
         print("======================================")
         print("")
+
+        record_consent("signup", response.user.id)
 
         if role == "stp":
             plant_account = request_stp_account(
@@ -5147,7 +5250,9 @@ def api_signup():
                         tanker_operator_id
                         if role == "tanker"
                         else ""
-                    )
+                    ),
+                    "terms_version": LEGAL_VERSION,
+                    "terms_accepted_at": datetime.now(ocems_api.IST).strftime("%Y-%m-%d %H:%M:%S"),
                 }
             }
         })
@@ -8601,87 +8706,25 @@ def legacy_order_awaiting_payment(row):
     return payment_status == "pending" and order_status == "pending"
 
 
+# Card payment was a demo (nothing was charged, yet the order showed as
+# "Paid"). ReFlow does not take payments: buyers pay the plant directly, on
+# delivery or by bank transfer against the plant's invoice (see confirm_cod).
+CARD_PAYMENT_DISABLED = "Online card payment isn't available. Choose pay on delivery or bank transfer."
+
+PAYMENT_ON_DELIVERY = "Cash on Delivery"   # stored value kept for older orders; shown as "Pay on delivery"
+PAYMENT_BANK_TRANSFER = "Bank Transfer"
+
+
 @app.route("/pay_now", methods=["POST"])
 def pay_now():
-    order_id = request.form.get("order_id", "").strip()
+    return CARD_PAYMENT_DISABLED, 410
 
-    if not order_id:
-        return "Order ID is missing", 400
 
-    # Place the order only after the buyer explicitly confirms payment.
-    pending_order = session.get("pending_order_draft") or {}
-    if str(pending_order.get("order_id", "")).strip() == order_id:
-        current_user_id = str(session.get("user_id") or "").strip()
-        draft_user_id = str(pending_order.get("buyer_user_id") or "").strip()
-
-        if not current_user_id or draft_user_id != current_user_id:
-            return "Unauthorized", 403
-
-        pending_order["status"] = "Pending"
-        pending_order["payment_status"] = "Paid"
-
-        if not store.exists(ORDERS_FILE):
-            with store.open(ORDERS_FILE, "w", newline="", encoding="utf-8") as f:
-                writer = csv.DictWriter(f, fieldnames=ORDER_FIELDS)
-                writer.writeheader()
-
-        with store.open(ORDERS_FILE, "a", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=ORDER_FIELDS)
-            writer.writerow({
-                field: pending_order.get(field, "")
-                for field in ORDER_FIELDS
-            })
-
-        session.pop("pending_order_draft", None)
-
-        return redirect(
-            url_for("demand", payment_success=order_id)
-        )
-
-    # Preserve the existing behavior for legacy orders already stored
-    # before the payment-draft flow was introduced.
-    if not store.exists(ORDERS_FILE):
-        return "Orders file not found", 404
-
-    updated_rows = []
-    order_found = False
-
-    with store.open(ORDERS_FILE, "r", newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        fieldnames = reader.fieldnames or ORDER_FIELDS
-
-        for row in reader:
-            if row.get("order_id", "").strip() == order_id:
-                current_user_id = session.get("user_id")
-
-                authorized = buyer_owns_order(row)
-
-                if not authorized:
-                    return "Unauthorized", 403
-
-                # Only a legacy order still waiting for its payment choice
-                # may be confirmed; never reset a placed/delivered/failed one.
-                if not legacy_order_awaiting_payment(row):
-                    return "This order has already been confirmed.", 400
-
-                row["status"] = "Pending"
-                row["payment_status"] = "Paid"
-                order_found = True
-
-            updated_rows.append(row)
-
-    if not order_found:
-        return "Order not found", 404
-
-    if "payment_status" not in fieldnames:
-        fieldnames.append("payment_status")
-
-    with store.open(ORDERS_FILE, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(updated_rows)
-
-    return redirect(url_for("demand", payment_success=order_id))
+def chosen_payment_method():
+    """How the buyer will pay the plant: on delivery (UPI or cash to the
+    tanker partner) or by bank transfer against the plant's invoice."""
+    method = str(request.form.get("method") or "").strip().lower()
+    return PAYMENT_BANK_TRANSFER if method == "bank_transfer" else PAYMENT_ON_DELIVERY
 
 
 @app.route("/confirm_cod", methods=["POST"])
@@ -8701,7 +8744,7 @@ def confirm_cod():
             return "Unauthorized", 403
 
         pending_order["status"] = "Pending"
-        pending_order["payment_status"] = "Cash on Delivery"
+        pending_order["payment_status"] = chosen_payment_method()
 
         if not store.exists(ORDERS_FILE):
             with store.open(ORDERS_FILE, "w", newline="", encoding="utf-8") as f:
@@ -8747,7 +8790,7 @@ def confirm_cod():
                     return "This order has already been confirmed.", 400
 
                 row["status"] = "Pending"
-                row["payment_status"] = "Cash on Delivery"
+                row["payment_status"] = chosen_payment_method()
                 order_found = True
 
             updated_rows.append(row)

@@ -1,7 +1,7 @@
 """Item 2: long identifiers never let a wrong password through, and
 passwords bcrypt would truncate are refused."""
 
-SIGNUP = dict(first_name="Ravi", last_name="Kumar", mobile="9000012345",
+SIGNUP = dict(accept_terms="yes", first_name="Ravi", last_name="Kumar", mobile="9000012345",
               username="ravi", role="demand")
 
 

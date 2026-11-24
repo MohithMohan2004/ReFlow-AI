@@ -2,7 +2,7 @@
 
 **Treated wastewater, routed where it's needed.**
 
-ReFlow connects sewage treatment plants (STPs) in Bengaluru with the people who can reuse their treated water, and coordinates the tankers that carry it there.
+ReFlow connects sewage treatment plants (STPs) in Bengaluru with the people who can reuse their treated water, and coordinates the tankers that carry it there. It is a non-commercial pilot run by a student project team. Treated water is for non-drinking uses only.
 
 Treated water is a valuable resource, yet most of it goes unused. Buyers rarely know which plant is nearby, whether its water meets quality standards, or how to get it delivered. Plants have spare capacity but no simple way to sell it. ReFlow brings both sides, and the delivery partners between them, onto one platform.
 
@@ -10,10 +10,9 @@ Treated water is a valuable resource, yet most of it goes unused. Buyers rarely 
 
 | Role | Who they are | What ReFlow gives them |
 |---|---|---|
-| **Demand sites** | Construction sites, apartments, industry, landscaping | Find the nearest plant that has the right water, check its live quality readings, order, track the tanker and pay |
+| **Demand sites** | Construction sites, apartments, industry, landscaping | Find the nearest plant that has the right water, check its quality readings, order and track the tanker |
 | **Plant operators (STPs)** | Treatment plant teams | Receive and accept orders, set prices, publish quality data, see demand forecasts, transfer water to other plants |
 | **Tanker partners** | Independent and contracted delivery operators | Get job offers nearby, navigate each trip, share live location, manage their fleet and documents |
-| **Admins** | Platform staff | Approve plants, tankers and quality reports, and watch demand across the city |
 
 ## How it works
 
@@ -21,7 +20,7 @@ Treated water is a valuable resource, yet most of it goes unused. Buyers rarely 
 2. **The plant accepts.** The plant operator reviews the order and accepts or rejects it.
 3. **A tanker is assigned.** The job is offered to nearby tanker partners one at a time, each with a short time to respond.
 4. **The tanker delivers.** The driver taps **Start trip**. Google Maps opens with directions to the plant, then on to the buyer after pickup. Meanwhile the buyer follows the tanker live.
-5. **The buyer pays.** A tax invoice (CGST + SGST) is issued, payable online or as cash on delivery. The trip is added to the tanker's history.
+5. **The buyer pays the plant directly**, on delivery (UPI or cash to the tanker partner) or by bank transfer against the plant's invoice. ReFlow shows an order summary and takes no payments. The trip is added to the tanker's history.
 
 Plants can also request water from each other, using the same tanker assignment flow.
 
@@ -56,7 +55,7 @@ ReFlow picks the nearest plant that can supply the order and draws the road rout
 
 **Also:**
 - Order list with All / Active / Pending / Completed filters, live tracking and shareable tracking links.
-- Tax invoices with an order timeline, print/PDF export, and pay-now or cash on delivery.
+- Order summaries with an order timeline and print/PDF export; buyers choose pay on delivery or bank transfer.
 
 ### For plant operators
 
@@ -76,7 +75,7 @@ The map shows the plant and the orders it serves. Opening an order draws its del
 **Also:**
 - A 7-day demand forecast.
 - Pricing control: base rate, peak-hour surcharge and off-peak discount.
-- Live water-quality readings from each plant's OCEMS (online effluent monitoring) system, connected with the vendor's API key from the plant profile and checked against CPCB limits.
+- Live water-quality readings from each plant's OCEMS (online effluent monitoring) system, connected with the vendor's API key from the plant profile, with an alert and a notification when pH, BOD, COD or TSS goes outside its reference limit.
 - Plant-to-plant water transfers.
 
 ### For tanker partners
@@ -119,16 +118,15 @@ Totals for trips, water delivered and distance hauled, a 30-day chart of deliver
 - Fleet and compliance documents (RC, insurance, PUC, permit) for each vehicle.
 - Step-by-step registration for independent and contracted operators, with a status lookup.
 
-### For admins
-- Overview, plants, approvals and orders in one dashboard.
-- A city-wide order-density heat map with plant locations.
-- Approval of plant and tanker registrations.
-
 ### Across the platform
 - **Juno**, a chat assistant that finds plants and answers questions in plain language.
 - **Demand forecasting** with a trained XGBoost model for each plant.
 - **Light and dark themes**: follows the device setting, or choose Light or Dark from the profile page or account menu.
 - **Android app** with native GPS, an app-style phone layout, a bottom tab bar, a full-screen map and a draggable bottom sheet.
+
+## Privacy, terms and policies
+
+The [privacy policy](https://reflow.lemonfield-c4c1d145.centralindia.azurecontainerapps.io/privacy), [terms of use](https://reflow.lemonfield-c4c1d145.centralindia.azurecontainerapps.io/terms), [cookie policy](https://reflow.lemonfield-c4c1d145.centralindia.azurecontainerapps.io/cookies), [refunds and cancellations](https://reflow.lemonfield-c4c1d145.centralindia.azurecontainerapps.io/refunds) and [accessibility statement](https://reflow.lemonfield-c4c1d145.centralindia.azurecontainerapps.io/accessibility) are published on the site (source: `frontend/src/pages/Legal.tsx`). Questions: reflow.circularity@gmail.com.
 
 ## Android app
 

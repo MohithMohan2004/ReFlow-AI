@@ -175,7 +175,7 @@ function OcemsAlertsDialog({ data, onClose }: { data: AlertsResponse | null; onC
 
         {data?.limits && (
           <p className="muted" style={{ fontSize: 12.5 }}>
-            Prescribed limits:{" "}
+            Alert limits (reference values; your plant&rsquo;s KSPCB consent conditions apply):{" "}
             {Object.entries(data.limits).map(([p, l]) => `${p} ${pretty(l)}${p === "pH" ? "" : " mg/L"}`).join(" · ")}
           </p>
         )}

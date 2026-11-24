@@ -472,6 +472,7 @@ CSV_FILES = {
     "database/stp_accounts.csv": "stp_accounts",
     "database/admin_mfa.csv": "admin_mfa",
     "database/ocems_alerts.csv": "ocems_alerts",
+    "database/consent_log.csv": "consent_log",
     "data/stp_pricing.csv": "stp_pricing",
     "database/stp_pricing.csv": "stp_pricing_fallback",
 }
