@@ -2913,6 +2913,21 @@ def home():
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
+    response = _password_login()
+    # Accounts that turned on two-step sign-in in Profile enter a code before
+    # the session opens. (Admins are parked inside _password_login.)
+    if (
+        request.method == "POST"
+        and getattr(response, "status_code", 200) in (301, 302, 303)
+        and session.get("user_id")
+        and str(session.get("role") or "").lower() not in ADMIN_ROLES
+        and mfa_record(session["user_id"])
+    ):
+        return start_user_mfa(response.headers.get("Location") or "/")
+    return response
+
+
+def _password_login():
 
     # =========================================================
     # GET REQUEST
@@ -4471,7 +4486,7 @@ def enforce_plant_approval():
       before approval existed, or access revoked);
     - admin sessions that didn't pass the two-step code, or are older than
       ADMIN_SESSION_SECONDS (12 h)."""
-    if request.path.startswith("/static/") or request.endpoint in ("health", "login", "logout", "api_login", "api_logout", "admin_mfa"):
+    if request.path.startswith("/static/") or request.endpoint in ("health", "login", "logout", "api_login", "api_logout", "admin_mfa", "user_mfa"):
         return None
     if not session.get("user_id"):
         return None
@@ -4507,16 +4522,20 @@ def enforce_plant_approval():
 
 
 # =========================================================
-# ADMIN TWO-STEP SIGN-IN (TOTP)
-# After the password, an admin must enter a 6-digit code from an
-# authenticator app. The first time, the page sets the app up. Secrets are
-# stored encrypted; each code works once; 5 wrong codes lock for 15 min.
-# Reset a lost phone with scripts/reset_admin_mfa.py <email>.
+# TWO-STEP SIGN-IN (TOTP)
+# After the password, an account with two-step sign-in enters a 6-digit
+# code from an authenticator app. Admins must use it (the first sign-in sets
+# it up); everyone else can turn it on or off in Profile. Secrets are stored
+# encrypted; each code works once; 5 wrong codes lock for 15 min.
+# Reset a lost phone with scripts/reset_admin_mfa.py <email> (any role).
+# The file keeps its old name so existing admin enrolments stay valid.
 # =========================================================
 
 ADMIN_MFA_FILE = os.path.join(DATABASE_DIR, "admin_mfa.csv")
 ADMIN_MFA_FIELDS = ["user_id", "email", "secret_enc", "enabled_at", "last_step", "failed_count", "locked_until"]
 admin_mfa_lock = threading.RLock()
+MFA_SETUP_SECONDS = 10 * 60
+MFA_LOCKED_MESSAGE = "Too many wrong codes. Wait 15 minutes, then sign in again."
 
 
 def load_admin_mfa():
@@ -4528,7 +4547,7 @@ def load_admin_mfa():
 
 
 def save_admin_mfa(rows):
-    with admin_mfa_lock:
+    with security.data_lock(), admin_mfa_lock:
         with store.open(ADMIN_MFA_FILE, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=ADMIN_MFA_FIELDS)
             writer.writeheader()
@@ -4536,13 +4555,64 @@ def save_admin_mfa(rows):
                 writer.writerow({k: row.get(k, "") for k in ADMIN_MFA_FIELDS})
 
 
-def start_admin_mfa():
-    """Park the signed-in admin's session values until the code is checked."""
+def mfa_record(user_id):
+    """The account's two-step sign-in row, or None when it's off."""
+    user_id = str(user_id or "")
+    if not user_id:
+        return None
+    return next((r for r in load_admin_mfa() if r.get("user_id") == user_id), None)
+
+
+def check_mfa_code(user_id, code, email=""):
+    """Check a code against the account's stored secret.
+    Returns (ok, error, locked_now). Wrong codes count towards the lock."""
+    with security.data_lock(), admin_mfa_lock:
+        rows = load_admin_mfa()
+        record = next((r for r in rows if r.get("user_id") == str(user_id)), None)
+        if record is None:
+            return False, "Two-step sign-in isn't turned on for this account.", False
+        if float(record.get("locked_until") or 0) > time.time():
+            security.audit("mfa_locked", account=email)
+            return False, MFA_LOCKED_MESSAGE, False
+        secret = security.decrypt_mfa_secret(record.get("secret_enc"))
+        step = security.totp_match(secret, code, last_step=int(record.get("last_step") or -1)) if secret else None
+        if step is not None:
+            record.update(last_step=str(step), failed_count="0", locked_until="")
+            save_admin_mfa(rows)
+            return True, None, False
+        failures = int(record.get("failed_count") or 0) + 1
+        record["failed_count"] = str(failures)
+        locked_now = failures >= security.MFA_MAX_FAILURES
+        if locked_now:
+            record["locked_until"] = str(time.time() + security.MFA_LOCK_SECONDS)
+            record["failed_count"] = "0"
+        save_admin_mfa(rows)
+        security.audit("mfa_failed", account=email, failures=failures)
+        if locked_now:
+            return False, MFA_LOCKED_MESSAGE, True
+        return False, "That code didn't match. Try the newest code from your authenticator app.", False
+
+
+def _park_session_for_mfa(endpoint, next_url=None):
+    """Hold the signed-in session's values until the code is checked."""
     values = dict(session)
     session.clear()
     session.permanent = True
-    session["mfa_pending"] = {"values": values, "started": time.time()}
-    return redirect(url_for("admin_mfa"))
+    session["mfa_pending"] = {"values": values, "started": time.time(), "next": next_url}
+    return redirect(url_for(endpoint))
+
+
+def start_admin_mfa():
+    return _park_session_for_mfa("admin_mfa")
+
+
+def start_user_mfa(next_url):
+    # Only ever send people back to a path on this site.
+    parts = urlparse(str(next_url or "/"))
+    next_url = (parts.path or "/") + (f"?{parts.query}" if parts.query else "")
+    if not next_url.startswith("/") or next_url.startswith("//"):
+        next_url = "/"
+    return _park_session_for_mfa("user_mfa", next_url)
 
 
 def _finish_admin_login(values):
@@ -4555,12 +4625,28 @@ def _finish_admin_login(values):
     return redirect(url_for("admin_dashboard"))
 
 
-@app.route("/admin/mfa", methods=["GET", "POST"])
-def admin_mfa():
+def _finish_user_login(values, next_url):
+    session.clear()
+    session.update(values)
+    session.permanent = True
+    session["mfa_ok"] = True
+    security.audit("mfa_login_ok", account=values.get("user_email"))
+    return redirect(next_url or "/")
+
+
+def _pending_mfa():
     pending = session.get("mfa_pending") or {}
     values = pending.get("values") or {}
     started = float(pending.get("started") or 0)
     if not values.get("user_id") or time.time() - started > security.MFA_PENDING_SECONDS:
+        return None, None
+    return pending, values
+
+
+@app.route("/admin/mfa", methods=["GET", "POST"])
+def admin_mfa():
+    pending, values = _pending_mfa()
+    if pending is None or str(values.get("role") or "").lower() not in ADMIN_ROLES:
         session.clear()
         return render_template("login.html", login_error="Your sign-in timed out. Sign in again.")
 
@@ -4569,10 +4655,7 @@ def admin_mfa():
     error = None
 
     with admin_mfa_lock:
-        rows = load_admin_mfa()
-        record = next((r for r in rows if r.get("user_id") == user_id), None)
-
-        if record is None:
+        if mfa_record(user_id) is None:
             # First sign-in after two-step became required: set it up.
             secret = pending.get("enroll_secret")
             if not secret:
@@ -4582,46 +4665,139 @@ def admin_mfa():
             if request.method == "POST":
                 step = security.totp_match(secret, request.form.get("code"))
                 if step is not None:
-                    rows.append({"user_id": user_id, "email": email,
-                                 "secret_enc": security.encrypt_mfa_secret(secret),
-                                 "enabled_at": datetime.now().isoformat(timespec="seconds"),
-                                 "last_step": str(step), "failed_count": "0", "locked_until": ""})
-                    save_admin_mfa(rows)
+                    _save_mfa_enrolment(user_id, email, secret, step)
                     security.audit("admin_mfa_enrolled", account=email)
                     return _finish_admin_login(values)
                 error = "That code didn't match. Check the time on your phone and try the newest code."
                 security.audit("admin_mfa_failed", account=email, stage="setup")
-            return render_template("admin_mfa.html", enroll=True, secret=secret,
-                                   secret_groups=" ".join(secret[i:i + 4] for i in range(0, len(secret), 4)),
+            return render_template("admin_mfa.html", admin=True, enroll=True, secret=secret,
+                                   secret_groups=_group_secret(secret),
                                    otpauth=security.otpauth_uri(secret, email or user_id),
                                    email=email, error=error)
 
         if request.method == "POST":
-            locked_until = float(record.get("locked_until") or 0)
-            if locked_until > time.time():
-                error = "Too many wrong codes. Wait 15 minutes, then sign in again."
-                security.audit("admin_mfa_locked", account=email)
-            else:
-                secret = security.decrypt_mfa_secret(record.get("secret_enc"))
-                step = security.totp_match(secret, request.form.get("code"),
-                                           last_step=int(record.get("last_step") or -1)) if secret else None
-                if step is not None:
-                    record.update(last_step=str(step), failed_count="0", locked_until="")
-                    save_admin_mfa(rows)
-                    return _finish_admin_login(values)
-                failures = int(record.get("failed_count") or 0) + 1
-                record["failed_count"] = str(failures)
-                if failures >= security.MFA_MAX_FAILURES:
-                    record["locked_until"] = str(time.time() + security.MFA_LOCK_SECONDS)
-                    record["failed_count"] = "0"
-                    session.clear()
-                    error = "Too many wrong codes. Wait 15 minutes, then sign in again."
-                else:
-                    error = "That code didn't match. Try the newest code from your authenticator app."
-                save_admin_mfa(rows)
-                security.audit("admin_mfa_failed", account=email, failures=failures)
+            ok, error, locked_now = check_mfa_code(user_id, request.form.get("code"), email)
+            if ok:
+                return _finish_admin_login(values)
+            if locked_now:
+                session.clear()
 
-    return render_template("admin_mfa.html", enroll=False, email=email, error=error)
+    return render_template("admin_mfa.html", admin=True, enroll=False, email=email, error=error)
+
+
+@app.route("/mfa", methods=["GET", "POST"])
+def user_mfa():
+    """Code step for demand, plant and tanker accounts that turned it on."""
+    pending, values = _pending_mfa()
+    if pending is None or str(values.get("role") or "").lower() in ADMIN_ROLES:
+        session.clear()
+        return render_template("login.html", login_error="Your sign-in timed out. Sign in again.")
+
+    user_id = str(values["user_id"])
+    email = values.get("user_email") or ""
+    next_url = pending.get("next") or "/"
+
+    if mfa_record(user_id) is None:
+        # Turned off on another device in the meantime.
+        return _finish_user_login(values, next_url)
+
+    error = None
+    if request.method == "POST":
+        ok, error, locked_now = check_mfa_code(user_id, request.form.get("code"), email)
+        if ok:
+            return _finish_user_login(values, next_url)
+        if locked_now:
+            session.clear()
+
+    return render_template("admin_mfa.html", admin=False, enroll=False, email=email, error=error)
+
+
+def _group_secret(secret):
+    return " ".join(secret[i:i + 4] for i in range(0, len(secret), 4))
+
+
+def _save_mfa_enrolment(user_id, email, secret, step):
+    with security.data_lock(), admin_mfa_lock:
+        rows = [r for r in load_admin_mfa() if r.get("user_id") != str(user_id)]
+        rows.append({"user_id": str(user_id), "email": email,
+                     "secret_enc": security.encrypt_mfa_secret(secret),
+                     "enabled_at": datetime.now().isoformat(timespec="seconds"),
+                     "last_step": str(step), "failed_count": "0", "locked_until": ""})
+        save_admin_mfa(rows)
+
+
+# ---- Profile → Two-step sign-in -------------------------------------------
+
+@app.route("/api/mfa")
+def api_mfa_status():
+    if not session.get("user_id"):
+        return jsonify({"success": False, "error": "Login required"}), 401
+    record = mfa_record(session["user_id"])
+    return jsonify({
+        "success": True,
+        "enabled": record is not None,
+        "enabled_at": (record or {}).get("enabled_at") or None,
+        "required": str(session.get("role") or "").lower() in ADMIN_ROLES,
+    })
+
+
+@app.route("/api/mfa/setup", methods=["POST"])
+def api_mfa_setup():
+    """Start turning it on: a new secret for the authenticator app. It's only
+    saved once a code from the app matches (/api/mfa/enable)."""
+    if not session.get("user_id"):
+        return jsonify({"success": False, "error": "Login required"}), 401
+    if mfa_record(session["user_id"]):
+        return jsonify({"success": False, "error": "Two-step sign-in is already on."}), 409
+    secret = security.new_totp_secret()
+    session["mfa_setup"] = {"secret": secret, "started": time.time()}
+    account = session.get("user_email") or session["user_id"]
+    return jsonify({
+        "success": True,
+        "secret": _group_secret(secret),
+        "otpauth": security.otpauth_uri(secret, account),
+    })
+
+
+@app.route("/api/mfa/enable", methods=["POST"])
+def api_mfa_enable():
+    if not session.get("user_id"):
+        return jsonify({"success": False, "error": "Login required"}), 401
+    setup = session.get("mfa_setup") or {}
+    secret = setup.get("secret")
+    if not secret or time.time() - float(setup.get("started") or 0) > MFA_SETUP_SECONDS:
+        session.pop("mfa_setup", None)
+        return jsonify({"success": False, "error": "Setup timed out. Start again."}), 400
+    code = (request.get_json(silent=True) or {}).get("code")
+    step = security.totp_match(secret, code)
+    if step is None:
+        return jsonify({"success": False, "error": "That code didn't match. Check the time on your phone and try the newest code."}), 400
+    email = session.get("user_email") or ""
+    _save_mfa_enrolment(session["user_id"], email, secret, step)
+    session.pop("mfa_setup", None)
+    session["mfa_ok"] = True
+    security.audit("mfa_enabled", account=email)
+    return jsonify({"success": True})
+
+
+@app.route("/api/mfa/disable", methods=["POST"])
+def api_mfa_disable():
+    """Turning it off needs a current code, so someone holding only a
+    signed-in device or a stolen session can't switch it off."""
+    if not session.get("user_id"):
+        return jsonify({"success": False, "error": "Login required"}), 401
+    if str(session.get("role") or "").lower() in ADMIN_ROLES:
+        return jsonify({"success": False, "error": "Admin accounts always use two-step sign-in."}), 403
+    user_id = str(session["user_id"])
+    email = session.get("user_email") or ""
+    code = (request.get_json(silent=True) or {}).get("code")
+    ok, error, _ = check_mfa_code(user_id, code, email)
+    if not ok:
+        return jsonify({"success": False, "error": error}), 400
+    with security.data_lock(), admin_mfa_lock:
+        save_admin_mfa([r for r in load_admin_mfa() if r.get("user_id") != user_id])
+    security.audit("mfa_disabled", account=email)
+    return jsonify({"success": True})
 
 
 def _session_stp_id():
@@ -5006,6 +5182,22 @@ def api_login():
                 "success": False,
                 "message": "Admin accounts sign in on the ReFlow website (two-step verification)."
             }), 403
+
+        # Accounts with two-step sign-in send the authenticator code as "code".
+        if mfa_record(session["user_id"]):
+            code = str(data.get("code") or "").strip()
+            if not code:
+                session.clear()
+                return jsonify({
+                    "success": False,
+                    "mfa_required": True,
+                    "message": "Enter the 6-digit code from your authenticator app."
+                }), 401
+            ok, error, _ = check_mfa_code(session["user_id"], code, session.get("user_email") or "")
+            if not ok:
+                session.clear()
+                return jsonify({"success": False, "mfa_required": True, "message": error}), 401
+            session["mfa_ok"] = True
 
         # Match the existing web login's invalid-role behavior.
         if session["role"] not in ROLE_HOME_ENDPOINT:

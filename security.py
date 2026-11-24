@@ -30,6 +30,9 @@ RATE_LIMITS = {
     "reset_password": ({"POST"}, 10, 600),
     "api_tanker_status": ({"POST"}, 10, 60),
     "admin_mfa": ({"POST"}, 10, 60),
+    "user_mfa": ({"POST"}, 10, 60),
+    "api_mfa_enable": ({"POST"}, 10, 60),
+    "api_mfa_disable": ({"POST"}, 10, 60),
     "chatbot": ({"POST"}, 20, 60),
     "api_search_place": ({"GET"}, 30, 60),
     "api_tanker_route": ({"GET"}, 30, 60),
@@ -573,7 +576,7 @@ def env_flag(name, default):
 
 
 # ---------------------------------------------------------------------------
-# Admin two-step sign-in: TOTP (RFC 6238), standard library only.
+# Two-step sign-in: TOTP (RFC 6238), standard library only.
 # Works with Google Authenticator, Microsoft Authenticator, Authy, 1Password…
 # ---------------------------------------------------------------------------
 

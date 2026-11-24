@@ -1,5 +1,7 @@
-"""Remove an admin's two-step sign-in so they can set it up again (lost or
-replaced phone). Run with the production environment:
+"""Remove an account's two-step sign-in (lost or replaced phone). Admins set
+it up again at their next sign-in; other users can turn it back on in Profile.
+
+Run with the production environment:
 
     venv/bin/python scripts/reset_admin_mfa.py admin@example.com
 
@@ -25,7 +27,7 @@ FIELDS = ["user_id", "email", "secret_enc", "enabled_at", "last_step", "failed_c
 def main(email):
     email = email.strip().lower()
     if not store.exists(PATH):
-        sys.exit("No admin has two-step sign-in yet.")
+        sys.exit("No account has two-step sign-in yet.")
     with store.open(PATH, "r", newline="", encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
     keep = [r for r in rows if (r.get("email") or "").strip().lower() != email]
@@ -35,7 +37,7 @@ def main(email):
         w = csv.DictWriter(f, fieldnames=FIELDS)
         w.writeheader()
         w.writerows({k: r.get(k, "") for k in FIELDS} for r in keep)
-    print(f"Reset. {email} will set up two-step sign-in again at their next sign-in.")
+    print(f"Reset. {email} can sign in with their password; admins set up two-step sign-in again.")
 
 
 if __name__ == "__main__":

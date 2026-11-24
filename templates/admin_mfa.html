@@ -28,8 +28,13 @@
                 <img src="{{ url_for('static', filename='brand-mark.svg') }}" alt="">
                 <span class="wordmark">Re<span>Flow</span></span>
             </div>
+            {% if admin %}
             <h1>Admin console,<br> <em>two keys to open.</em></h1>
             <p class="lede">Admin accounts confirm every sign-in with a code from an authenticator app on your phone, so a leaked password alone can't open the console.</p>
+            {% else %}
+            <h1>One more step,<br> <em>then you're in.</em></h1>
+            <p class="lede">You turned on two-step sign-in, so every sign-in is confirmed with a code from the authenticator app on your phone. You can turn it off in Profile.</p>
+            {% endif %}
         </section>
 
         <section class="login-panel" aria-labelledby="mfa-title">
@@ -38,7 +43,7 @@
                 <p class="subtitle">One-time setup for {{ email }}.</p>
             {% else %}
                 <h2 id="mfa-title">Enter your code</h2>
-                <p class="subtitle">Open your authenticator app and enter the 6-digit code for ReFlow ({{ email }}).</p>
+                <p class="subtitle">Open your authenticator app and enter the 6&#8209;digit code for ReFlow ({{ email }}).</p>
             {% endif %}
 
             {% if error %}<div class="message error" role="alert">{{ error }}</div>{% endif %}
@@ -53,7 +58,7 @@
                 </ol>
             {% endif %}
 
-            <form method="POST" action="{{ url_for('admin_mfa') }}">
+            <form method="POST" action="{{ url_for('admin_mfa' if admin else 'user_mfa') }}">
                 <div class="field">
                     <label for="code">6-digit code</label>
                     <div class="input-wrap">

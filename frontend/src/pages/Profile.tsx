@@ -1,8 +1,9 @@
 import { own } from "../lib/lookup";
-import { useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Marker } from "react-leaflet";
+import { QRCodeSVG } from "qrcode.react";
 import {
-  AtSign, Building2, CircleCheck, ClipboardList, Droplets, Factory, Gauge, IdCard, LogOut, Pencil, Mail, MapPin, Phone, KeyRound, Radar, ShieldCheck, Truck, Unplug, Wifi, MonitorSmartphone,
+  AtSign, Building2, CircleCheck, ClipboardList, Droplets, Factory, Gauge, IdCard, LogOut, Pencil, Mail, MapPin, Phone, KeyRound, Radar, ShieldCheck, Smartphone, Truck, Unplug, Wifi, MonitorSmartphone,
 } from "lucide-react";
 import { AppShell } from "../components/AppShell";
 import { publicNav, roleNav } from "../components/nav";
@@ -81,6 +82,8 @@ export default function Profile() {
           <OperatorCard op={p.data?.operator ?? null} />
         ) : null}
 
+        <TwoStepCard />
+
         <SignOutEverywhereCard />
 
         <section className="card">
@@ -99,6 +102,154 @@ export default function Profile() {
         <EditDialog data={p.data} onClose={() => setEditing(false)} onSaved={() => { setEditing(false); window.location.reload(); }} />
       )}
     </AppShell>
+  );
+}
+
+interface MfaStatus { enabled: boolean; enabled_at: string | null; required: boolean }
+
+/** Two-step sign-in is the user's choice (admins always have it). Turning it
+ *  on needs a code from the new authenticator entry; turning it off needs a
+ *  current code, so a borrowed signed-in phone can't switch it off. */
+function TwoStepCard() {
+  const s = useAsync((sig) => getJSON<MfaStatus>("/api/mfa", sig));
+  const [dialog, setDialog] = useState<"on" | "off" | null>(null);
+  const on = !!s.data?.enabled;
+  const locked = !!s.data?.required && on;
+
+  return (
+    <section className="card">
+      <header className="card-head">
+        <div><h2>Two-step sign-in</h2><p>Ask for a code from an authenticator app each time you sign in</p></div>
+        {s.data && (
+          <button
+            type="button" role="switch" aria-checked={on} aria-label="Two-step sign-in"
+            className="switch" disabled={locked}
+            onClick={() => setDialog(on ? "off" : "on")}
+          ><span /></button>
+        )}
+      </header>
+      <div className="mfa-body">
+        {s.loading && !s.data ? <SkeletonRows rows={1} /> : s.error ? <Notice tone="danger">{s.error}</Notice> : (
+          <div className="feed-row">
+            <span className="mini-icon" data-tone={on ? "teal" : "sky"}><Smartphone size={16} /></span>
+            <div className="feed-main">
+              <div className="row wrap" style={{ gap: 8 }}>
+                <strong>{on ? "On" : "Off"}</strong>
+                {on && <span className="badge" data-tone="success">Protected</span>}
+                {locked && <span className="badge">Required for admins</span>}
+              </div>
+              <div className="feed-meta">
+                {on
+                  ? <>After your password, ReFlow asks for the {"6\u2011digit"} code from your authenticator app{s.data?.enabled_at ? <> · on since {when(s.data.enabled_at)}</> : null}.</>
+                  : "Only your password is needed to sign in. Set it up so a leaked password alone can't open your account."}
+              </div>
+            </div>
+            {!on && (
+              <button type="button" className="btn btn-sm btn-primary mfa-setup-btn" onClick={() => setDialog("on")}>
+                <KeyRound size={15} /> Set up
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+      {dialog === "on" && <MfaSetupDialog onClose={() => setDialog(null)} onDone={() => { setDialog(null); s.reload(); }} />}
+      {dialog === "off" && <MfaDisableDialog onClose={() => setDialog(null)} onDone={() => { setDialog(null); s.reload(); }} />}
+    </section>
+  );
+}
+
+function CodeField({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  return (
+    <label className="field"><span className="field-label">6-digit code</span>
+      <input className="input num mfa-code" required autoFocus inputMode="numeric" autoComplete="one-time-code"
+        maxLength={7} pattern="[0-9 ]{6,7}" value={value} onChange={(e) => onChange(e.target.value.replace(/[^\d ]/g, ""))} />
+    </label>
+  );
+}
+
+function MfaSetupDialog({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
+  const toast = useToast();
+  // One setup request per dialog (the secret lives in the session cookie, so
+  // a second request would race the first).
+  const [setup, setSetup] = useState<{ data?: { secret: string; otpauth: string }; error?: string }>({});
+  const started = useRef(false);
+  useEffect(() => {
+    if (started.current) return;
+    started.current = true;
+    postJSON<{ secret: string; otpauth: string }>("/api/mfa/setup", {})
+      .then((data) => setSetup({ data }))
+      .catch((err) => setSetup({ error: err instanceof Error ? err.message : "Could not start setup" }));
+  }, []);
+  const [code, setCode] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function confirm(e: FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      await postJSON("/api/mfa/enable", { code });
+      toast("Two-step sign-in is on.", "success");
+      onDone();
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Could not turn it on", "danger");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog title="Turn on two-step sign-in" onClose={onClose}>
+      {setup.error ? <Notice tone="danger">{setup.error}</Notice> : !setup.data ? <SkeletonRows rows={3} /> : (
+        <form onSubmit={confirm} className="stack" autoComplete="off">
+          <ol className="mfa-steps">
+            <li>Install an authenticator app if you don't have one: Google Authenticator, Microsoft Authenticator or Authy.</li>
+            <li>
+              Scan this code with the app, or choose <b>Enter a setup key</b> and type the key below (time based).
+              <div className="mfa-qr"><QRCodeSVG value={setup.data.otpauth} size={156} marginSize={2} bgColor="#ffffff" fgColor="#0b1626" title="Setup code for your authenticator app" /></div>
+              <code className="mfa-key">{setup.data.secret}</code>
+              <a className="mfa-link" href={setup.data.otpauth}>On this phone? Open it in your authenticator app</a>
+            </li>
+            <li>Enter the 6-digit code the app shows for ReFlow.</li>
+          </ol>
+          <CodeField value={code} onChange={setCode} />
+          <div className="row" style={{ justifyContent: "flex-end", gap: 8 }}>
+            <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
+            <button type="submit" className="btn btn-primary" disabled={busy}>{busy ? "Checking…" : "Turn on"}</button>
+          </div>
+        </form>
+      )}
+    </Dialog>
+  );
+}
+
+function MfaDisableDialog({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
+  const toast = useToast();
+  const [code, setCode] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function confirm(e: FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      await postJSON("/api/mfa/disable", { code });
+      toast("Two-step sign-in is off.", "success");
+      onDone();
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Could not turn it off", "danger");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog title="Turn off two-step sign-in?" onClose={onClose}>
+      <form onSubmit={confirm} className="stack" autoComplete="off">
+        <p style={{ margin: 0 }}>Enter the current code from your authenticator app to confirm. After this, only your password is needed to sign in.</p>
+        <CodeField value={code} onChange={setCode} />
+        <div className="row" style={{ justifyContent: "flex-end", gap: 8 }}>
+          <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
+          <button type="submit" className="btn btn-danger" disabled={busy}>{busy ? "Checking…" : "Turn off"}</button>
+        </div>
+      </form>
+    </Dialog>
   );
 }
 
