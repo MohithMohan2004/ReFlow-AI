@@ -26,6 +26,8 @@ RATE_LIMITS = {
     "api_login": ({"POST"}, 10, 60),
     "signup": ({"POST"}, 5, 600),
     "api_signup": ({"POST"}, 5, 600),
+    "forgot_password": ({"POST"}, 5, 600),
+    "reset_password": ({"POST"}, 10, 600),
     "api_tanker_status": ({"POST"}, 10, 60),
     "admin_mfa": ({"POST"}, 10, 60),
     "chatbot": ({"POST"}, 20, 60),
@@ -372,6 +374,8 @@ LOCK_FREE_ENDPOINTS = {
     # self-locking: login/signup (plant request), OCEMS connect (vendor test
     # first), geocoding and routing (auto_reset_capacity / transfers file)
     "login", "api_login", "signup", "api_signup", "api_ocems_connection_submit",
+    # password reset: only end_all_sessions writes, and it locks itself
+    "forgot_password", "reset_password",
     "api_search_place", "api_tanker_route",
 }
 

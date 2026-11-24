@@ -110,7 +110,10 @@
                 </div>
 
                 <div class="field">
-                    <label for="password">Password</label>
+                    <div class="field-head">
+                        <label for="password">Password</label>
+                        <a href="{{ url_for('forgot_password') }}" class="forgot">Forgot password?</a>
+                    </div>
                     <div class="input-wrap password-wrap">
                         <svg class="lead" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
                         <input

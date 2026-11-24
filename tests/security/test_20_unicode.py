@@ -42,9 +42,12 @@ def test_lookalike_login_reaches_only_the_real_account(client, app_module):
     assert ("sign_in", "bigbird@example.com") in app_module.supabase.auth.calls  # same account, same password check
 
 
-def test_no_password_reset_flow_to_hijack(app_module):
-    rules = [r.rule for r in app_module.app.url_map.iter_rules()]
-    assert not [r for r in rules if "reset" in r or "forgot" in r or "recover" in r]
+def test_password_reset_request_reaches_only_the_real_account(client, app_module):
+    """The reset flow (Supabase one-time link) normalises look-alikes to the
+    real address; it can't be pointed at a second, look-alike account."""
+    app_module.supabase.auth.add_user("bigbird@example.com", "bird-password-1")
+    client.post("/forgot-password", data={"email": "ＢＩＧＢＩＲＤ@example.com"})
+    assert ("reset_email", "bigbird@example.com") == app_module.supabase.auth.calls[-1][:2]
 
 
 def test_profile_username_change_is_normalised_and_checked(as_user):
