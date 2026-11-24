@@ -107,8 +107,34 @@ class FakeAuth:
         self.add_user(email, payload["password"], **meta)
         return types.SimpleNamespace(user=self._user(self.users[email], email))
 
-    def sign_out(self):
+    def sign_out(self, *_a, **_k):
         return None
+
+    # Password reset: reset_password_for_email "emails" a one-time token
+    # (kept in self.reset_tokens), verify_otp spends it.
+    def reset_password_for_email(self, email, options=None):
+        self.calls.append(("reset_email", email, (options or {}).get("redirect_to")))
+        if email in self.users:
+            token = f"tok{len(self.calls)}x{abs(hash(email)) % 10**8}"
+            self.reset_tokens = getattr(self, "reset_tokens", {})
+            self.reset_tokens[token] = email
+
+    def verify_otp(self, params):
+        self.reset_tokens = getattr(self, "reset_tokens", {})
+        email = self.reset_tokens.pop(params.get("token_hash"), None)
+        if email is None or params.get("type") != "recovery":
+            raise FakeAuthError("Email link is invalid or has expired", "otp_expired")
+        self.recovering = email
+        return types.SimpleNamespace(user=self._user(self.users[email], email))
+
+    def update_user(self, attributes):
+        email = getattr(self, "recovering", None)
+        if not email:
+            raise FakeAuthError("Auth session missing!", "session_not_found")
+        if attributes.get("password") == self.users[email]["password"]:
+            raise FakeAuthError("New password should be different from the old password.", "same_password")
+        self.users[email]["password"] = attributes["password"]
+        return types.SimpleNamespace(user=self._user(self.users[email], email))
 
 
 class FakeTable:

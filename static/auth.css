@@ -134,6 +134,9 @@
 
 .field { display: grid; gap: 7px; margin-bottom: 16px; }
 .field label { font-size: 13px; font-weight: 600; color: var(--ink-700); }
+.field-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.forgot, .inline-link { font-size: 13px; font-weight: 600; color: var(--brand); text-decoration: none; }
+.forgot:hover, .inline-link:hover { text-decoration: underline; }
 .input-wrap { position: relative; }
 .input-wrap > .lead {
     position: absolute; left: 13px; top: 50%; transform: translateY(-50%);

@@ -3006,6 +3006,141 @@ def login():
         )
 
 
+# =========================================================
+# FORGOT PASSWORD
+# Supabase Auth sends the reset email (through the Brevo SMTP set up in the
+# Supabase dashboard). Its "Reset Password" template links to
+#   {{ .SiteURL }}/reset-password?token_hash={{ .TokenHash }}&type=recovery
+# Opening the link only shows the form; the one-time token is used when the
+# form is submitted, so mail scanners that pre-open links can't burn it.
+# =========================================================
+
+FORGOT_PASSWORD_REPLY = (
+    "If an account exists for {email}, we've sent it a link to reset the password. "
+    "It can take a minute to arrive; check your spam folder too."
+)
+
+RESET_LINK_INVALID = (
+    "This reset link has expired or was already used. Request a new one below."
+)
+
+
+def fresh_supabase_auth():
+    """A Supabase auth client of its own for one password reset, so the
+    recovery session never lands on the shared app-wide client."""
+    from supabase.lib.client_options import SyncClientOptions
+    client = create_client(
+        SUPABASE_URL,
+        SUPABASE_KEY,
+        options=SyncClientOptions(auto_refresh_token=False, persist_session=False),
+    )
+    return client.auth
+
+
+def public_base_url():
+    base = (os.getenv("PUBLIC_BASE_URL") or "").strip().rstrip("/")
+    return base or request.host_url.rstrip("/")
+
+
+@app.route("/forgot-password", methods=["GET", "POST"])
+def forgot_password():
+    if request.method == "GET":
+        return render_template("password_reset.html", mode="forgot")
+
+    email = security.normalize_identity(str(request.form.get("email") or "").strip().lower())
+
+    if not email or "@" not in email or len(email) > security.MAX_EMAIL_LENGTH:
+        return render_template(
+            "password_reset.html", mode="forgot",
+            error="Enter the email address you signed up with."
+        )
+
+    try:
+        supabase.auth.reset_password_for_email(
+            email, {"redirect_to": public_base_url() + url_for("reset_password")}
+        )
+        security.audit("password_reset_requested", account=email)
+    except Exception as e:
+        # Unknown address, Supabase's own 60-second limit, mail trouble:
+        # the reply stays the same so it never reveals who has an account.
+        print("PASSWORD RESET EMAIL ERROR:", type(e).__name__, getattr(e, "code", "") or e)
+        security.audit("password_reset_request_failed", account=email,
+                       reason=getattr(e, "code", "") or type(e).__name__)
+
+    return render_template(
+        "password_reset.html", mode="sent",
+        message=FORGOT_PASSWORD_REPLY.format(email=email)
+    )
+
+
+@app.route("/reset-password", methods=["GET", "POST"])
+def reset_password():
+    token_hash = str(request.values.get("token_hash") or "").strip()
+
+    if not token_hash or len(token_hash) > 256 or not re.fullmatch(r"[A-Za-z0-9_\-]+", token_hash):
+        return render_template("password_reset.html", mode="forgot", error=RESET_LINK_INVALID)
+
+    if request.method == "GET":
+        return render_template("password_reset.html", mode="reset", token_hash=token_hash)
+
+    password = str(request.form.get("password") or "")
+    confirm_password = str(request.form.get("confirm_password") or "")
+
+    def form_error(message):
+        return render_template("password_reset.html", mode="reset", token_hash=token_hash, error=message)
+
+    # Check everything we can before the one-time token is used up.
+    if len(password) < security.MIN_PASSWORD_LENGTH:
+        return form_error(f"Use at least {security.MIN_PASSWORD_LENGTH} characters.")
+    if security.password_too_long(password):
+        return form_error("Password must be at most 72 bytes (about 72 letters or digits).")
+    if password != confirm_password:
+        return form_error("Passwords do not match.")
+
+    auth = fresh_supabase_auth()
+
+    try:
+        verified = auth.verify_otp({"token_hash": token_hash, "type": "recovery"})
+        user = getattr(verified, "user", None)
+        if not user:
+            raise ValueError("no user")
+    except Exception as e:
+        print("PASSWORD RESET LINK ERROR:", type(e).__name__, getattr(e, "code", "") or e)
+        security.audit("password_reset_failed", reason=getattr(e, "code", "") or "invalid_link")
+        return render_template("password_reset.html", mode="forgot", error=RESET_LINK_INVALID)
+
+    account = str(user.email or "").lower()
+
+    try:
+        auth.update_user({"password": password})
+    except Exception as e:
+        code = str(getattr(e, "code", "") or "")
+        print("PASSWORD RESET UPDATE ERROR:", type(e).__name__, code or e)
+        security.audit("password_reset_failed", account=account, reason=code or type(e).__name__)
+        if code == "same_password":
+            message = "That's already your password, so you can sign in with it."
+            flash(message, "success")
+            return redirect(url_for("login"))
+        if code == "weak_password":
+            message = "That password is too weak. Request a new link and choose a stronger one."
+        else:
+            message = "We couldn't change your password. Request a new link and try again."
+        return render_template("password_reset.html", mode="forgot", error=message)
+    finally:
+        try:
+            auth.sign_out()
+        except Exception:
+            pass
+
+    # Anyone who was signed in with the old password is signed out everywhere.
+    end_all_sessions(user.id)
+    session.clear()
+    security.audit("password_reset", account=account)
+
+    flash("Your password has been changed. Sign in with your new password.", "success")
+    return redirect(url_for("login"))
+
+
 def login_error_message(error):
     """Turn a Supabase sign-in error into a message the user can act on."""
     code = str(getattr(error, "code", "") or "")
