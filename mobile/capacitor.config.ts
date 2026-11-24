@@ -20,6 +20,12 @@ const offline = readFileSync("www/offline.html", "utf8").replace(
 );
 writeFileSync("www/offline.html", offline);
 
+// The WebView's user agent ends with "ReFlowApp/<versionName>" so the web
+// app (static/app-update.js) knows which version is installed and can offer
+// the newest GitHub release. Read from app/build.gradle, the one place the
+// version is set.
+const versionName = /versionName\s+"([^"]+)"/.exec(readFileSync("android/app/build.gradle", "utf8"))?.[1] ?? "0";
+
 const config: CapacitorConfig = {
   appId: "in.reflow.app",
   appName: "ReFlow",
@@ -34,6 +40,14 @@ const config: CapacitorConfig = {
   android: {
     allowMixedContent: serverUrl.startsWith("http://"),
     backgroundColor: "#ffffff",
+    appendUserAgent: `ReFlowApp/${versionName}`,
+  },
+  plugins: {
+    // OCEMS limit alerts (frontend/src/lib/notify.ts).
+    LocalNotifications: {
+      smallIcon: "ic_stat_reflow",
+      iconColor: "#1463d6",
+    },
   },
 };
 

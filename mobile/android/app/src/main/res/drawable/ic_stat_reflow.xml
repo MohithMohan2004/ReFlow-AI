@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Status-bar icon for notifications (OCEMS alerts): the ReFlow mark, one colour. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp" android:height="24dp" android:viewportWidth="48" android:viewportHeight="48">
+    <path android:pathData="M23 23H0A23 23 0 0 1 23 0Z" android:fillColor="#FFFFFF"/>
+    <path android:pathData="M25 0H48A23 23 0 0 1 25 23Z" android:fillColor="#FFFFFF"/>
+    <path android:pathData="M0 25A23 23 0 0 1 23 48H0Z" android:fillColor="#FFFFFF"/>
+    <path android:pathData="M26,36.5a10.5,10.5 0,1 1,21 0a10.5,10.5 0,1 1,-21 0z" android:fillColor="#FFFFFF"/>
+</vector>

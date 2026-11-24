@@ -202,6 +202,9 @@ database/admin_mfa.csv
 database/ocems_api_connections.csv
 data/session_epochs.json
 data/revoked_sessions.json
+# OCEMS limit alerts (runtime)
+database/ocems_alerts.csv
+data/ocems_alert_state.json
 
 # Private team and outreach material (the repository is public)
 # internal Azure/ops notes

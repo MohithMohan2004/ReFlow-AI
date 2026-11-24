@@ -32,6 +32,7 @@ from supabase import create_client
 from config import Config
 import store
 import ocems_api
+import ocems_alerts
 from urllib.parse import urlparse
 
 # =========================================================
@@ -2490,6 +2491,202 @@ def load_ocems_data(stp_id):
     }
 
 
+# =========================================================
+# OCEMS LIMIT ALERTS
+# When a plant's pH, BOD, COD or TSS goes outside OCEMS_DEFAULT_LIMITS, an
+# alert opens (rules in ocems_alerts.py). A background thread checks every
+# plant with OCEMS data each minute; the plant's Supply page also triggers a
+# check when it polls, and shows the alerts and a notification.
+# =========================================================
+
+OCEMS_ALERTS_FILE = os.path.join(DATABASE_DIR, "ocems_alerts.csv")
+OCEMS_ALERT_STATE_FILE = os.path.join(BASE_DIR, "data", "ocems_alert_state.json")
+OCEMS_ALERT_CHECK_SECONDS = 60
+OCEMS_ALERTS_SHOWN = 30
+ocems_alerts_lock = threading.RLock()
+
+
+def load_ocems_alerts():
+    with ocems_alerts_lock:
+        if not store.exists(OCEMS_ALERTS_FILE) or store.getsize(OCEMS_ALERTS_FILE) == 0:
+            return []
+        with store.open(OCEMS_ALERTS_FILE, "r", newline="", encoding="utf-8") as f:
+            return list(csv.DictReader(f))
+
+
+def save_ocems_alerts(rows):
+    with ocems_alerts_lock:
+        with store.open(OCEMS_ALERTS_FILE, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=ocems_alerts.FIELDS)
+            writer.writeheader()
+            for row in rows:
+                writer.writerow({k: row.get(k, "") for k in ocems_alerts.FIELDS})
+
+
+def load_ocems_alert_state():
+    if not store.exists(OCEMS_ALERT_STATE_FILE) or store.getsize(OCEMS_ALERT_STATE_FILE) == 0:
+        return {}
+    try:
+        with store.open(OCEMS_ALERT_STATE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (ValueError, OSError):
+        return {}
+
+
+def check_ocems_alerts(stp_id, ocems=None):
+    """Apply the plant's latest OCEMS readings to its alerts. Returns the
+    alerts that opened during this check."""
+    stp_id = str(stp_id or "").strip()
+    if not stp_id:
+        return []
+    if ocems is None:
+        ocems = load_ocems_data(stp_id)   # may wait on the vendor: outside the lock
+    if not ocems.get("available") or not ocems.get("rows"):
+        return []
+
+    with security.data_lock(), ocems_alerts_lock:
+        alerts = load_ocems_alerts()
+        state = load_ocems_alert_state()
+        before = state.get(stp_id, "")
+        opened, after = ocems_alerts.evaluate(
+            stp_id,
+            ocems["rows"],
+            ocems.get("permissible_ranges") or OCEMS_DEFAULT_LIMITS,
+            ocems.get("units") or {},
+            alerts,
+            before,
+            datetime.now(ocems_api.IST).strftime("%Y-%m-%d %H:%M:%S"),
+            lambda: "OA-" + secrets.token_hex(5).upper(),
+        )
+        if after == before:
+            return []
+        save_ocems_alerts(alerts)
+        state[stp_id] = after
+        with store.open(OCEMS_ALERT_STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump(state, f)
+
+    for alert in opened:
+        security.audit("ocems_limit_exceeded", stp=stp_id, parameter=alert["parameter"],
+                       value=alert["last_value"], limit=alert["limit"])
+    return opened
+
+
+def ocems_alert_plants():
+    """Plants with OCEMS data to watch: live feeds plus the demo plants."""
+    plants = {
+        str(row.get("stp_id") or "").strip()
+        for row in load_ocems_api_connections()
+        if row.get("status") == "approved"
+    }
+    plants |= set(SYNTHETIC_OCEMS_STPS)
+    plants.discard("")
+    return sorted(plants)
+
+
+def ocems_alert_worker():
+    while True:
+        for stp_id in ocems_alert_plants():
+            try:
+                check_ocems_alerts(stp_id)
+            except Exception as e:
+                print(f"OCEMS ALERT CHECK ({stp_id}):", type(e).__name__, e)
+        time.sleep(OCEMS_ALERT_CHECK_SECONDS)
+
+
+_ocems_alert_worker_pid = None
+
+
+def start_ocems_alert_worker():
+    """One checker per machine (file lock), like the tanker timeout worker."""
+    global _ocems_alert_worker_pid
+    if _ocems_alert_worker_pid == os.getpid():
+        return
+    _ocems_alert_worker_pid = os.getpid()
+
+    def run_as_leader():
+        try:
+            import fcntl
+        except ImportError:
+            ocems_alert_worker()
+            return
+        lock_file = open(os.path.join(tempfile.gettempdir(), "reflow-ocems-alerts.lock"), "w")
+        while True:
+            try:
+                fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                time.sleep(30)
+        ocems_alert_worker()
+
+    threading.Thread(target=run_as_leader, daemon=True, name="ocems-alert-worker").start()
+
+
+def public_ocems_alert(alert):
+    return {
+        "alert_id": alert.get("alert_id"),
+        "parameter": alert.get("parameter"),
+        "unit": alert.get("unit") or "",
+        "limit": alert.get("limit") or "",
+        "status": alert.get("status"),
+        "started_at": alert.get("started_at"),
+        "first_value": alert.get("first_value"),
+        "worst_value": alert.get("worst_value"),
+        "last_value": alert.get("last_value"),
+        "last_seen_at": alert.get("last_seen_at"),
+        "resolved_at": alert.get("resolved_at") or None,
+        "read": bool(alert.get("read_at")),
+        "message": ocems_alerts.describe(alert),
+    }
+
+
+def plant_session_stp_id():
+    """The plant a signed-in plant user runs (approved), else None."""
+    if not session.get("user_id") or str(session.get("role") or "").strip().lower() != "stp":
+        return None
+    return str(session.get("stp_id") or "").strip() or None
+
+
+@app.route("/api/ocems_alerts")
+def api_ocems_alerts():
+    stp_id = plant_session_stp_id()
+    if not stp_id:
+        return jsonify({"success": False, "error": "Unauthorized"}), 403
+
+    try:
+        check_ocems_alerts(stp_id)
+    except Exception as e:
+        print(f"OCEMS ALERT CHECK ({stp_id}):", type(e).__name__, e)
+
+    mine = [a for a in load_ocems_alerts() if a.get("stp_id") == stp_id]
+    mine.sort(key=lambda a: (a.get("status") == ocems_alerts.OPEN, a.get("last_seen_at") or ""), reverse=True)
+    return jsonify({
+        "success": True,
+        "open": sum(1 for a in mine if a.get("status") == ocems_alerts.OPEN),
+        "unread": sum(1 for a in mine if not a.get("read_at")),
+        "limits": OCEMS_DEFAULT_LIMITS,
+        "alerts": [public_ocems_alert(a) for a in mine[:OCEMS_ALERTS_SHOWN]],
+    })
+
+
+@app.route("/api/ocems_alerts/read", methods=["POST"])
+def api_ocems_alerts_read():
+    stp_id = plant_session_stp_id()
+    if not stp_id:
+        return jsonify({"success": False, "error": "Unauthorized"}), 403
+    stamp = datetime.now(ocems_api.IST).strftime("%Y-%m-%d %H:%M:%S")
+    with security.data_lock(), ocems_alerts_lock:
+        alerts = load_ocems_alerts()
+        changed = False
+        for alert in alerts:
+            if alert.get("stp_id") == stp_id and not alert.get("read_at"):
+                alert["read_at"] = stamp
+                changed = True
+        if changed:
+            save_ocems_alerts(alerts)
+    return jsonify({"success": True})
+
+
 
 
 # =========================================================
@@ -2516,6 +2713,79 @@ def serve_spa():
         )
     response = send_file(SPA_INDEX)
     response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
+# =========================================================
+# ANDROID APP UPDATES
+# The newest GitHub release, for the "Update available" prompt that
+# static/app-update.js shows inside the Android app. Cached so GitHub's
+# unauthenticated limit (60 requests an hour) is never reached.
+# =========================================================
+
+APP_RELEASES_REPO = (os.getenv("APP_RELEASES_REPO") or "MohithMohan2004/ReFlow-AI").strip()
+APP_RELEASE_CACHE_SECONDS = 15 * 60
+_app_release_cache = {"at": 0.0, "data": None}
+_app_release_lock = threading.Lock()
+
+
+def fetch_latest_app_release():
+    response = requests.get(
+        f"https://api.github.com/repos/{APP_RELEASES_REPO}/releases/latest",
+        headers={"Accept": "application/vnd.github+json", "User-Agent": "ReFlow-server"},
+        timeout=8,
+    )
+    response.raise_for_status()
+    release = response.json()
+    tag = str(release.get("tag_name") or "").strip()
+    version = tag[1:] if tag[:1] in ("v", "V") else tag
+    if not re.fullmatch(r"\d+(\.\d+){0,3}", version):
+        return None
+    apk = next(
+        (a for a in release.get("assets") or [] if str(a.get("name") or "").lower().endswith(".apk")),
+        None,
+    )
+    page_url = str(release.get("html_url") or "")
+    download_url = str((apk or {}).get("browser_download_url") or "")
+    # Only ever send the app to GitHub.
+    if not page_url.startswith("https://github.com/"):
+        page_url = ""
+    if not download_url.startswith("https://github.com/"):
+        download_url = ""
+    if not (page_url or download_url):
+        return None
+    return {
+        "version": version,
+        "name": str(release.get("name") or f"ReFlow {version}")[:80],
+        "published_at": str(release.get("published_at") or ""),
+        "download_url": download_url,
+        "page_url": page_url,
+    }
+
+
+def latest_app_release():
+    with _app_release_lock:
+        now = time.time()
+        if _app_release_cache["data"] is not None and now - _app_release_cache["at"] < APP_RELEASE_CACHE_SECONDS:
+            return _app_release_cache["data"]
+        try:
+            data = fetch_latest_app_release()
+        except Exception as e:
+            print("APP RELEASE CHECK ERROR:", type(e).__name__, e)
+            # Keep serving the last answer; try GitHub again in a minute.
+            _app_release_cache["at"] = now - APP_RELEASE_CACHE_SECONDS + 60
+            return _app_release_cache["data"]
+        _app_release_cache.update(at=now, data=data)
+        return data
+
+
+@app.route("/api/app/latest")
+def api_app_latest():
+    data = latest_app_release()
+    if not data:
+        return jsonify({"error": "unavailable"}), 503
+    response = jsonify(data)
+    response.headers["Cache-Control"] = "public, max-age=300"
     return response
 
 
@@ -18126,10 +18396,13 @@ def api_ocems_summary(stp_id):
 # defined. Scripts that import app don't load gunicorn and don't start it.
 if "gunicorn" in sys.modules:
     start_timeout_worker()
+    start_ocems_alert_worker()
     os.register_at_fork(after_in_child=start_timeout_worker)
+    os.register_at_fork(after_in_child=start_ocems_alert_worker)
 
 if __name__ == "__main__":
     start_timeout_worker()
+    start_ocems_alert_worker()
 
     port = int(os.environ.get("PORT", 10000))
 

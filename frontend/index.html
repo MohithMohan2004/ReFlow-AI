@@ -18,6 +18,8 @@
         document.documentElement.dataset.theme = dark ? "dark" : "light";
       })();
     </script>
+    <!-- Android app only: offers the newest release (no-op in a browser). -->
+    <script src="/static/app-update.js" defer></script>
   </head>
   <body>
     <div id="root"></div>
