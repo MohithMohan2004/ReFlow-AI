@@ -198,3 +198,10 @@
 @media (max-width: 900px) {
   .status-layout { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* Required consent tick (ConsentCheck) */
+.consent-row { padding: 4px 24px 12px; display: grid; gap: 6px; }
+.consent-check { display: flex; gap: 10px; align-items: flex-start; font-size: 14px; line-height: 1.55; color: var(--ink-700); cursor: pointer; }
+.consent-check input { width: 18px; height: 18px; margin: 2px 0 0; flex: none; accent-color: var(--brand); }
+.consent-check input[aria-invalid="true"] { outline: 2px solid var(--danger); outline-offset: 2px; }
+.consent-check a { color: var(--brand); font-weight: 600; }

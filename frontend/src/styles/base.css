@@ -51,3 +51,14 @@ img, svg { display: block; max-width: 100%; }
     scroll-behavior: auto !important;
   }
 }
+
+/* Keyboard users can jump past the sidebar. Off-screen with transform (not
+   opacity) until it receives focus. */
+.skip-link {
+  position: fixed; top: 8px; left: 8px; z-index: 10000;
+  padding: 10px 14px; border-radius: 10px;
+  background: var(--brand); color: #fff; font-weight: 600; text-decoration: none;
+  transform: translateY(-160%);
+}
+.skip-link:focus { transform: none; }
+#content:focus { outline: none; }

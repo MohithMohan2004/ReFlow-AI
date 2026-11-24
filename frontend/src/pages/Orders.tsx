@@ -127,9 +127,10 @@ function payment(p?: string, refund?: string) {
   if (r === "refund pending") return <Badge tone="warning">Refund pending</Badge>;
   if (r === "not charged") return <Badge tone="neutral">Not charged</Badge>;
   const s = norm(p);
-  if (s.includes("paid")) return <Badge tone="success">Paid</Badge>;
-  if (s.includes("cash") || s.includes("cod")) return <Badge tone="info">Cash on delivery</Badge>;
-  return <Badge tone="warning">Unpaid</Badge>;
+  if (s === "paid") return <Badge tone="neutral">Marked paid (demo)</Badge>;
+  if (s.includes("bank")) return <Badge tone="info">Bank transfer</Badge>;
+  if (s.includes("cash") || s.includes("cod")) return <Badge tone="info">Pay on delivery</Badge>;
+  return <Badge tone="warning">Not chosen</Badge>;
 }
 
 export default function Orders() {
@@ -180,7 +181,7 @@ export default function Orders() {
     <AppShell
       nav={nav}
       title={isPlant ? "Order tracking" : "My orders"}
-      subtitle={isPlant ? "Orders for your plant and the tankers delivering them" : "Track your water deliveries and invoices"}
+      subtitle={isPlant ? "Orders for your plant and the tankers delivering them" : "Track your water deliveries and order summaries"}
       actions={
         <>
           <button type="button" className="btn btn-ghost btn-icon" onClick={r.reload} aria-label="Refresh" title="Refresh">
@@ -293,7 +294,7 @@ function OrderRow({ o, isPlant, stpId, open, onToggle }: { o: Order; isPlant: bo
             {open ? <><X /> Hide map</> : <><MapPinned /> Track</>}
           </button>
         )}
-        <a className="btn btn-sm btn-secondary" href={`/invoice?order_id=${encodeURIComponent(o.order_id)}`}><FileText /> Invoice</a>
+        <a className="btn btn-sm btn-secondary" href={`/invoice?order_id=${encodeURIComponent(o.order_id)}`}><FileText /> Order summary</a>
         {isPlant && o.buyer_phone && <a className="btn btn-sm btn-ghost" href={`tel:${o.buyer_phone}`}><Phone /> Call buyer</a>}
         {!isPlant && <button type="button" className="btn btn-sm btn-ghost" onClick={() => setReorder(true)}><RotateCcw /> Reorder</button>}
       </div>

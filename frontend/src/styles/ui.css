@@ -953,3 +953,9 @@
 }
 .alert-list li[data-status="open"] { border-color: var(--danger-line); }
 .alert-list small { font-size: 12px; }
+
+/* Legal footer (components/LegalFooter.tsx) */
+.legal-foot { margin: 24px 0 8px; padding-top: 16px; border-top: 1px solid var(--line); font-size: 13px; color: var(--ink-500); }
+.legal-foot ul { list-style: none; margin: 0 0 8px; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 16px; }
+.legal-foot a { color: var(--ink-700); font-weight: 600; }
+.legal-foot p { margin: 4px 0; }

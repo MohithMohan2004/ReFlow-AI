@@ -110,13 +110,13 @@ def test_owner_reads_still_work(world, as_user):
 
 WRITES = [
     (BUYER_B, "/pay_now", {"order_id": "ORD-A1"}),
-    (BUYER_B, "/confirm_cod", {"order_id": "ORD-A1"}),
+    (BUYER_B, "/confirm_cod", {"order_id": "ORD-A1", "accept_terms": "yes"}),
     (BUYER_B, "/cancel_cod", {"order_id": "ORD-A1"}),
     (BUYER_B, "/reorder/ORD-A4", {}),
     (BUYER_B, "/cancel_cod", {"order_id": "ORD-L1"}),       # name+phone match is not ownership
     (BUYER_B, "/pay_now", {"order_id": "ORD-L1"}),
     (BUYER_A, "/pay_now", {"order_id": "ORD-A4"}),          # own delivered order: no reset
-    (BUYER_A, "/confirm_cod", {"order_id": "ORD-A2"}),       # own order on the road: no reset
+    (BUYER_A, "/confirm_cod", {"order_id": "ORD-A2", "accept_terms": "yes"}),  # own order on the road: no reset
     (PLANT_3, "/handle_request", {"request_id": "ORD-A1", "action": "accept"}),
     (PLANT_3, "/update_order_status", {"order_id": "ORD-A1", "status": "Accepted"}),
     (PLANT_3, "/update_capacity", {"stp_id": "PSTP001", "available_capacity_mld": "0", "request_id": "x"}),

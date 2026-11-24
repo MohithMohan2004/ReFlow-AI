@@ -20,8 +20,9 @@ def test_headers_present(client, path):
 
 def test_csp_allows_only_known_hosts():
     hosts = {tok for d in security.CONTENT_SECURITY_POLICY.split(";") for tok in d.split()[1:] if tok.startswith("https://")}
-    assert hosts == {"https://cdn.jsdelivr.net", "https://cdnjs.cloudflare.com", "https://fonts.googleapis.com",
-                     "https://fonts.gstatic.com", "https://tile.openstreetmap.org", "https://*.tile.openstreetmap.org",
+    # Fonts are self-hosted (static/fonts): no Google Fonts.
+    assert hosts == {"https://cdn.jsdelivr.net", "https://cdnjs.cloudflare.com",
+                     "https://tile.openstreetmap.org", "https://*.tile.openstreetmap.org",
                      "https://nominatim.openstreetmap.org", "https://router.project-osrm.org"}
     assert "'unsafe-eval'" not in security.CONTENT_SECURITY_POLICY
 

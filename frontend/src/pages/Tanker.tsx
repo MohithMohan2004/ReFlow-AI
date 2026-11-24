@@ -579,7 +579,7 @@ function ReportDialog({ o, onClose, onDone }: { o: Order; onClose: () => void; o
           as <strong>Delivery failed</strong>.{" "}
           {transfer
             ? "Both plants see it, and the water reserved at the source plant goes back to its free capacity."
-            : "The buyer sees it on their tracking page and gets a full refund if they paid online."}
+            : "The buyer sees it on their tracking page and isn't charged for this order."}
           {" "}If you're in an accident, make sure everyone is safe and call 112 first.
         </p>
         <fieldset className="report-reasons">

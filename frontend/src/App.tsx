@@ -16,6 +16,7 @@ const StpRegister = lazy(() => import("./pages/register/StpRegister"));
 const TankerChoice = lazy(() => import("./pages/register/TankerChoice"));
 const TankerForm = lazy(() => import("./pages/register/TankerForm"));
 const TankerStatus = lazy(() => import("./pages/register/TankerStatus"));
+const Legal = lazy(() => import("./pages/Legal"));
 
 function PageFallback() {
   return <div className="page-loading" aria-busy="true" />;
@@ -48,6 +49,9 @@ export default function App() {
               <Route path="/tanker/register/independent" element={<TankerForm key="independent" variant="independent" />} />
               <Route path="/tanker/register/contracted" element={<TankerForm key="contracted" variant="contracted" />} />
               <Route path="/tanker/status" element={<TankerStatus />} />
+              {["/privacy", "/terms", "/cookies", "/refunds", "/accessibility"].map((p) => (
+                <Route key={p} path={p} element={<Legal />} />
+              ))}
               <Route path="*" element={<NotFound />} />
             </Routes>
           </Suspense>

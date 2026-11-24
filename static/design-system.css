@@ -1,4 +1,4 @@
-@import url("https://fonts.googleapis.com/css2?family=Sora:wght@600;700&display=swap");
+@import url("/static/fonts/fonts.css");
 /* ============================================================
    ReFlow · Design System
    ------------------------------------------------------------
@@ -24,7 +24,7 @@
   --ink-700: #334155;
   --ink-600: #4b5a6e;
   --ink-500: #5f6e82;
-  --ink-400: #8a97a8;
+  --ink-400: #617083;
   --ink-300: #b8c2cf;
   --line:        #e4e9f0;
   --line-strong: #d4dbe4;
@@ -105,7 +105,7 @@
 :root[data-theme="dark"] {
   color-scheme: dark;
   --ink-900: #e8edf5; --ink-800: #d4dce8; --ink-700: #b6c2d2; --ink-600: #9eabbd;
-  --ink-500: #8594a8; --ink-400: #66778d; --ink-300: #46566c;
+  --ink-500: #8594a8; --ink-400: #7d8ea3; --ink-300: #46566c;
   --line: #1f2b3d; --line-strong: #2a3850;
   --bg: #080e19; --surface: #0f1726; --surface-2: #131d2e; --surface-3: #18243a;
   --glass: rgba(15, 23, 38, 0.88); --glass-line: rgba(255, 255, 255, 0.08); --float-ink: #24324a;

@@ -202,6 +202,8 @@ database/admin_mfa.csv
 database/ocems_api_connections.csv
 data/session_epochs.json
 data/revoked_sessions.json
+# Record of who accepted the terms / privacy policy, and when
+database/consent_log.csv
 # OCEMS limit alerts (runtime)
 database/ocems_alerts.csv
 data/ocems_alert_state.json

@@ -17,7 +17,7 @@ import { applyFilter, bucketOf, filterOptions, type OrderFilter } from "../lib/o
 import { getJSON, postJSON } from "../lib/api";
 import { useAsync } from "../lib/useAsync";
 import { useToast } from "../lib/toast";
-import { num, when } from "../lib/format";
+import { num, when, paymentLabel } from "../lib/format";
 import type { OcemsReading, Stp } from "../lib/types";
 import { GRADES } from "../lib/grades";
 import "./demand.css";
@@ -447,7 +447,7 @@ export default function Demand() {
                           <b className="num">{num(o.quantity_kld)} KLD</b> · {o.stp_name}
                         </span>
                         <span className="order-meta muted">
-                          {when(o.created_at)}{o.payment_status ? ` · ${o.payment_status}` : ""}
+                          {when(o.created_at)}{o.payment_status ? ` · ${paymentLabel(o.payment_status)}` : ""}
                           <span className="order-go">{bucketOf(o.status) === "completed" ? "Details" : "Track"} <ArrowRight size={13} /></span>
                         </span>
                       </a>

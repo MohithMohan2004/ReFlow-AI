@@ -53,6 +53,7 @@ export function AppShell({ nav, title, subtitle, actions, sidebarFoot, mapFirst 
 
   return (
     <div className="shell" data-collapsed={collapsed} data-mobile-open={mobileOpen} data-tabs={tabs.length > 1} data-map-first={mapFirst}>
+      <a className="skip-link" href="#content">Skip to main content</a>
       <aside className="sidebar" aria-label="Primary">
         <div className="sidebar-head">
           <Link to="/" className="sidebar-brand" aria-label="ReFlow home">
@@ -110,7 +111,7 @@ export function AppShell({ nav, title, subtitle, actions, sidebarFoot, mapFirst 
 
       <div className="scrim" onClick={() => setMobileOpen(false)} aria-hidden="true" />
 
-      <div className="main">
+      <div className="main" id="content" tabIndex={-1}>
         <header className="topbar">
           <button type="button" className="btn btn-ghost btn-icon menu-btn" onClick={() => setMobileOpen(true)} aria-label="Open menu">
             <Menu size={18} />
