@@ -471,6 +471,7 @@ CSV_FILES = {
     "database/ocems_api_connections.csv": "ocems_api_connections",
     "database/stp_accounts.csv": "stp_accounts",
     "database/admin_mfa.csv": "admin_mfa",
+    "database/ocems_alerts.csv": "ocems_alerts",
     "data/stp_pricing.csv": "stp_pricing",
     "database/stp_pricing.csv": "stp_pricing_fallback",
 }
@@ -481,6 +482,7 @@ JSON_FILES = {
     "data/profile_overrides.json": "profile_overrides",
     "data/session_epochs.json": "session_epochs",
     "data/revoked_sessions.json": "revoked_sessions",
+    "data/ocems_alert_state.json": "ocems_alert_state",
 }
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))

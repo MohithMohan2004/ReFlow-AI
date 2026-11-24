@@ -376,6 +376,8 @@ LOCK_FREE_ENDPOINTS = {
     "login", "api_login", "signup", "api_signup", "api_ocems_connection_submit",
     # read-only; calls GitHub, so it must never hold the lock
     "api_app_latest",
+    # OCEMS alerts: may wait on the vendor feed; lock only around their writes
+    "api_ocems_alerts", "api_ocems_alerts_read",
     # password reset: only end_all_sessions writes, and it locks itself
     "forgot_password", "reset_password",
     "api_search_place", "api_tanker_route",

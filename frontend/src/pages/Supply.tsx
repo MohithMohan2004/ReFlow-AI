@@ -14,6 +14,7 @@ import { ForecastChart } from "../components/ForecastChart";
 import { FitBounds, MapFrame, pinIcon, dotIcon } from "../components/map";
 import { MapSheet, setSheet, useIsPhone } from "../components/MapSheet";
 import { OcemsGrid } from "../components/OcemsGrid";
+import { OcemsAlertBanner, OcemsAlertsButton, useOcemsAlerts } from "../components/OcemsAlerts";
 import { Dialog } from "../components/Dialog";
 import { Empty, Notice, Segmented, SkeletonRows, Spinner, Stat, StatusBadge } from "../components/ui";
 import { getJSON, postForm, postJSON } from "../lib/api";
@@ -63,6 +64,9 @@ export default function Supply() {
     (s) => (stp ? getJSON<OcemsReading>(`/api/ocems_summary/${encodeURIComponent(stp.stp_id)}`, s) : Promise.resolve(null)),
     [stp?.stp_id],
   );
+
+  // Limit alerts: only for the plant this user runs (the server scopes them).
+  const ocemsAlerts = useOcemsAlerts(ov.data?.bound_stp_id || null);
 
   // The server polls the OCEMS vendor every minute; pick up new readings
   // quietly (no skeleton) while the tab is visible.
@@ -218,6 +222,7 @@ export default function Supply() {
       actions={
         <>
           {selector}
+          {ov.data?.bound_stp_id && <OcemsAlertsButton alerts={ocemsAlerts} />}
           <button type="button" className="btn btn-ghost btn-icon" onClick={ov.reload} aria-label="Refresh" title="Refresh">
             {ov.loading ? <Spinner /> : <RefreshCw />}
           </button>
@@ -408,6 +413,7 @@ export default function Supply() {
                     <a href="/supply_ocems" className="btn btn-sm btn-ghost">Details <ArrowRight /></a>
                   </header>
                   <div className="card-body stack" style={{ gap: 14 }}>
+                    {ov.data?.bound_stp_id === stp?.stp_id && <OcemsAlertBanner alerts={ocemsAlerts} />}
                     <OcemsGrid reading={ocems.data} loading={ocems.loading} />
                     {!ocems.loading && !ocems.data?.available && (
                       <div className="upload-row">

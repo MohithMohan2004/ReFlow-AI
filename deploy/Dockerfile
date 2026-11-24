@@ -63,7 +63,7 @@ COPY --from=deps /opt/venv /opt/venv
 
 # Only what the server needs at runtime. data/ and database/ hold the seed
 # files the app reads (and, without DATABASE_URL, writes).
-COPY --chown=reflow:reflow app.py config.py store.py ocems_api.py security.py ./
+COPY --chown=reflow:reflow app.py config.py store.py ocems_api.py ocems_alerts.py security.py ./
 COPY --chown=reflow:reflow chatbot/ ./chatbot/
 COPY --chown=reflow:reflow ml/ ./ml/
 COPY --chown=reflow:reflow data/ ./data/
