@@ -32,3 +32,17 @@ The app loads the server set in `REFLOW_SERVER_URL` when it is built:
 Install on a connected phone or emulator with `adb install -r android/app/build/outputs/apk/debug/app-debug.apk`.
 
 A Play Store release additionally needs a signing key and `./gradlew bundleRelease`.
+
+## Releasing a new version (the app prompts users to update)
+
+The app shows **"Update available"** when the newest GitHub release is newer
+than the installed version (`static/app-update.js`, server side
+`/api/app/latest`, checked every 15 minutes).
+
+1. Bump `versionCode` and `versionName` in `android/app/build.gradle`.
+2. `npx cap sync android` (puts `ReFlowApp/<versionName>` in the app's user
+   agent), then build the signed release APK.
+3. Create the GitHub release with tag `v<versionName>` (for example `v1.7`)
+   and attach the `.apk`. The tag must match `versionName`.
+
+Installs from before 1.7 don't send their version and are treated as 1.6.

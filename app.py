@@ -2519,6 +2519,79 @@ def serve_spa():
     return response
 
 
+# =========================================================
+# ANDROID APP UPDATES
+# The newest GitHub release, for the "Update available" prompt that
+# static/app-update.js shows inside the Android app. Cached so GitHub's
+# unauthenticated limit (60 requests an hour) is never reached.
+# =========================================================
+
+APP_RELEASES_REPO = (os.getenv("APP_RELEASES_REPO") or "MohithMohan2004/ReFlow-AI").strip()
+APP_RELEASE_CACHE_SECONDS = 15 * 60
+_app_release_cache = {"at": 0.0, "data": None}
+_app_release_lock = threading.Lock()
+
+
+def fetch_latest_app_release():
+    response = requests.get(
+        f"https://api.github.com/repos/{APP_RELEASES_REPO}/releases/latest",
+        headers={"Accept": "application/vnd.github+json", "User-Agent": "ReFlow-server"},
+        timeout=8,
+    )
+    response.raise_for_status()
+    release = response.json()
+    tag = str(release.get("tag_name") or "").strip()
+    version = tag[1:] if tag[:1] in ("v", "V") else tag
+    if not re.fullmatch(r"\d+(\.\d+){0,3}", version):
+        return None
+    apk = next(
+        (a for a in release.get("assets") or [] if str(a.get("name") or "").lower().endswith(".apk")),
+        None,
+    )
+    page_url = str(release.get("html_url") or "")
+    download_url = str((apk or {}).get("browser_download_url") or "")
+    # Only ever send the app to GitHub.
+    if not page_url.startswith("https://github.com/"):
+        page_url = ""
+    if not download_url.startswith("https://github.com/"):
+        download_url = ""
+    if not (page_url or download_url):
+        return None
+    return {
+        "version": version,
+        "name": str(release.get("name") or f"ReFlow {version}")[:80],
+        "published_at": str(release.get("published_at") or ""),
+        "download_url": download_url,
+        "page_url": page_url,
+    }
+
+
+def latest_app_release():
+    with _app_release_lock:
+        now = time.time()
+        if _app_release_cache["data"] is not None and now - _app_release_cache["at"] < APP_RELEASE_CACHE_SECONDS:
+            return _app_release_cache["data"]
+        try:
+            data = fetch_latest_app_release()
+        except Exception as e:
+            print("APP RELEASE CHECK ERROR:", type(e).__name__, e)
+            # Keep serving the last answer; try GitHub again in a minute.
+            _app_release_cache["at"] = now - APP_RELEASE_CACHE_SECONDS + 60
+            return _app_release_cache["data"]
+        _app_release_cache.update(at=now, data=data)
+        return data
+
+
+@app.route("/api/app/latest")
+def api_app_latest():
+    data = latest_app_release()
+    if not data:
+        return jsonify({"error": "unavailable"}), 503
+    response = jsonify(data)
+    response.headers["Cache-Control"] = "public, max-age=300"
+    return response
+
+
 @app.route("/health")
 def health():
     """Cheap health check for the host: the app is up and, when
