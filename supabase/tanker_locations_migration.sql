@@ -25,7 +25,7 @@ create index if not exists idx_tanker_locations_operator
 -- connection (DATABASE_URL, as the table owner), so the public anon key needs
 -- no access at all. RLS on with no policies = anon/authenticated see nothing.
 -- (The old "tanker_locations_anon_all" policy let anyone with the publishable
--- key read and overwrite every truck's location; see)
+-- key read and overwrite every truck's location.)
 alter table public.tanker_locations enable row level security;
 
 drop policy if exists "tanker_locations_anon_all" on public.tanker_locations;

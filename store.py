@@ -499,8 +499,8 @@ if DATABASE_URL:
 # Live tanker locations (public.tanker_locations)
 #
 # Read and written over the server's own database connection, so the table
-# no longer needs a policy that lets the public anon key read or write it
-#. SQLite (tests) has no schemas.
+# no longer needs a policy that lets the public anon key read or write it.
+# SQLite (tests) has no schemas.
 # ---------------------------------------------------------------------------
 
 TANKER_LOCATION_COLUMNS = (

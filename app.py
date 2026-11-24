@@ -615,8 +615,7 @@ ocems_api.start_warmer(_active_ocems_feeds)
 if ocems_api.missing_production_key_secret():
     print(
         "SECURITY WARNING: OCEMS_KEY_SECRET is not set. Stored OCEMS keys are "
-        "read with FLASK_SECRET_KEY and new keys can't be saved until it is set "
-        "."
+        "read with FLASK_SECRET_KEY and new keys can't be saved until it is set."
     )
 
 # =========================================================
