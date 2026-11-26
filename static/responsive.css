@@ -307,7 +307,7 @@ button,input,select,textarea { max-width:100%; }
 
     .card,.stat-card,.section,.map-card,.pickup-form,.operation-item,.detail-box { width:100%; max-width:100%; box-sizing:border-box; }
     form { max-width:100%; }
-    input,select,textarea { width:100% !important; min-width:0 !important; box-sizing:border-box !important; }
+    input:not([type="checkbox"]):not([type="radio"]),select,textarea { width:100% !important; min-width:0 !important; box-sizing:border-box !important; }
     .btn,button,.hero-btn,.pickup-button,.tanker-request-button { min-height:42px; max-width:100%; }
 
     .table-container,.table-wrapper,.table-wrap,.table-responsive,.orders-table-container,.responsive-table,.data-table-container { width:100%; max-width:100%; overflow-x:auto !important; -webkit-overflow-scrolling:touch; }
